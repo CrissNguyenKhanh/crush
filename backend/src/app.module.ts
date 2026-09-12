@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { join } from 'path';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './modules/users/users.module';
@@ -84,7 +85,9 @@ import { ChatMessage } from 'modules/chat/entities/chat-message.entity';
           Websocket,
           ChatMessage,
         ],
-        synchronize: true,
+        migrations: [join(__dirname, '..', 'migration', '*.{ts,js}')],
+        migrationsRun: configService.get<boolean>('TYPEORM_MIGRATIONS_RUN', false),
+        synchronize: false,
       }),
       inject: [ConfigService],
     }),
