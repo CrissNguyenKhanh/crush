@@ -32,6 +32,7 @@ import { PMDashboardPage } from "./pages/pm/PMDashboardPage";
 import BenchForecast from "./pages/hr/BenchForecast";
 import TalentManagement from "./pages/hr/TalentManagement";
 import UserPorjectPage from "./pages/dev/project";
+import DevProjectDetail from "./pages/dev/project-detail";
 import SkillTreePage from "./pages/dev/skill-tree";
 
 
@@ -134,6 +135,10 @@ function App() {
         {
           path: "user-project",
           element: <UserPorjectPage />,
+        },
+        {
+          path: "projects/:projectId",
+          element: <DevProjectDetail />,
         },
         {
           path: "skill-tree",

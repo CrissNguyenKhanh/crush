@@ -82,7 +82,7 @@ export class PmAccessService {
 
     if (!relation) {
       throw new ForbiddenException({
-        code: 'PM_PROJECT_ACCESS_DENIED',
+        code: '`PM_PROJECT_ACCESS_DENIED`',
 
         message: 'Bạn không phải Project Manager của Project này.',
 
