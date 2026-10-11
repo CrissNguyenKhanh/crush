@@ -11,7 +11,6 @@ import {
     Progress,
     Space,
     Flex,
-    theme,
     message,
     Avatar,
     Badge,
@@ -36,7 +35,6 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 
 const { Title, Text } = Typography;
-const { useToken } = theme;
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 const colors = {
@@ -206,7 +204,6 @@ const SkillLevelTag: React.FC<{ level: 'high' | 'medium' | 'low' }> = ({ level }
 
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 const HRDashboard: React.FC = () => {
-    const { token } = useToken();
     const [messageApi, contextHolder] = message.useMessage();
     const [activeTab, setActiveTab] = useState<string>('ai_bench');
 

@@ -222,7 +222,7 @@ export const EditTaskModal: React.FC<Props> = ({
       confirmLoading={loading}
       okText="Lưu thay đổi"
       cancelText="Hủy"
-      size="large"
+      width={800}
       destroyOnHidden
     >
       <Form form={form} layout="vertical" onFinish={handleFinish}>
@@ -319,7 +319,7 @@ export const EditTaskModal: React.FC<Props> = ({
           </Form.Item>
         </Space>
 
-        <Divider orientation="left" plain>
+        <Divider titlePlacement="start" plain>
           Required Skills
         </Divider>
 

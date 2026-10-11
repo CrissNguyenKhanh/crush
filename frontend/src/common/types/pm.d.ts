@@ -2,6 +2,7 @@ export type UserSprintStatus =
   | "requested"
   | "pending_approval"
   | "assigned"
+  | "declined"
   | "released";
 // frontend/src/common/types/pm.d.ts
 
@@ -114,6 +115,8 @@ export interface UserSprintItem {
     fullName: string;
     email: string;
   };
+  responseReason?: string | null;
+  respondedAt?: string | null;
 }
 
 export interface SkillEvidence {
@@ -183,4 +186,3 @@ export interface ChatMessage {
     email: string;
   };
 }
-

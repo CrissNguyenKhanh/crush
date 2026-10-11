@@ -33,7 +33,7 @@ const UserSkillPage = () => {
 
     return (
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Card bordered={false}>
+            <Card bordered={false} loading={loading}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                     <div>
                         <Title level={3} style={{ marginBottom: 4 }}>

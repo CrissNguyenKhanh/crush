@@ -15,6 +15,7 @@ import HRDashboard from "./pages/hr/Dashboard";
 import WalletAdmin from "./pages/hr/WalletAdmin";
 import ReviewConsole from "./pages/hr/ReviewConsole";
 import LayoutPM from "./layout/pm";
+import { PMActionCenterPage } from "./pages/pm/PMActionCenterPage";
 
 import { SprintManagementPage } from "./pages/pm/SprintManagement";
 import { MyTeamPage } from "./pages/pm/MyTeamPage"; // (Trang ở sprint trước)
@@ -34,14 +35,6 @@ import TalentManagement from "./pages/hr/TalentManagement";
 import UserPorjectPage from "./pages/dev/project";
 import DevProjectDetail from "./pages/dev/project-detail";
 import SkillTreePage from "./pages/dev/skill-tree";
-
-
-const PlaceholderPage = ({ title }: { title: string }) => (
-  <div style={{ padding: 48, textAlign: "center", color: "#8c8c8c" }}>
-    <h2>{title}</h2>
-    <p>Trang đang được phát triển.</p>
-  </div>
-);
 
 function App() {
   const dispatch = useAppDispatch();
@@ -91,6 +84,10 @@ function App() {
         {
           path: "dashboard",
           element: <PMDashboardPage />,
+        },
+        {
+          path: "action-center",
+          element: <PMActionCenterPage />,
         },
         {
           path: "projects",

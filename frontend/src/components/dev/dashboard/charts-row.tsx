@@ -29,7 +29,7 @@ const DevDashboardChartsRow = ({ projectStatusData, skillLevelData, summary, ski
                                     innerRadius={70}
                                     outerRadius={110}
                                     paddingAngle={3}
-                                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                    label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                                 >
                                     {projectStatusData.map((entry, index) => (
                                         <Cell key={`project-status-${index}`} fill={entry.fill} />
@@ -58,7 +58,7 @@ const DevDashboardChartsRow = ({ projectStatusData, skillLevelData, summary, ski
                                     innerRadius={70}
                                     outerRadius={110}
                                     paddingAngle={3}
-                                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                    label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
                                 >
                                     {skillLevelData.map((entry, index) => (
                                         <Cell key={`skill-level-${index}`} fill={entry.fill} />

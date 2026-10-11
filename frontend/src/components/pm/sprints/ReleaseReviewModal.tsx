@@ -22,6 +22,18 @@ interface Props {
   onRefresh: () => void; // Load lại danh sách nhân sự sau khi giải phóng
 }
 
+interface ReleaseErrorData {
+  code?: string;
+  error?: { code?: string };
+  message?: string;
+  unfinishedTasks?: Array<{
+    id: string;
+    title?: string;
+    status?: string;
+    progress?: number;
+  }>;
+}
+
 export const ReleaseReviewModal: React.FC<Props> = ({
   open,
   userSprintId,
@@ -47,8 +59,11 @@ export const ReleaseReviewModal: React.FC<Props> = ({
       form.resetFields();
       onRefresh();
       onClose();
-    } catch (error) {
-      const errorData = error?.response?.data;
+    } catch (error: unknown) {
+      const candidate = error as ReleaseErrorData & {
+        response?: { data?: ReleaseErrorData };
+      };
+      const errorData = candidate.response?.data ?? candidate;
 
       const code = errorData?.code ?? errorData?.error?.code;
 
@@ -132,7 +147,7 @@ export const ReleaseReviewModal: React.FC<Props> = ({
       </div>
 
       <Form form={form} layout="vertical" onFinish={handleFinish}>
-        <Divider orientation="left" plain>
+        <Divider titlePlacement="start" plain>
           Đánh giá hiệu suất (Bắt buộc)
         </Divider>
 

@@ -126,7 +126,7 @@ export const CreateTaskModal: React.FC<Props> = ({
       confirmLoading={loading}
       okText="Tạo Task"
       cancelText="Hủy"
-      size="large"
+      width={800}
       destroyOnHidden
     >
       <Form
@@ -254,7 +254,7 @@ export const CreateTaskModal: React.FC<Props> = ({
         {/* REQUIRED SKILLS */}
         {/* ================================= */}
 
-        <Divider orientation="left" plain>
+        <Divider titlePlacement="start" plain>
           Yêu cầu Kỹ năng (Required Skills)
         </Divider>
 

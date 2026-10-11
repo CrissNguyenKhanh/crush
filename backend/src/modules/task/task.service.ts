@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -76,7 +75,6 @@ export class TasksService {
 
   // 4. Tạo Task và gán kĩ năng yêu cầu (Required Skills JSON)
   async createTask(data: any) {
-    Logger.debug('tao là khánh', data);
     if (!data.sprintId) {
       throw new BadRequestException({
         code: 'SPRINT_REQUIRED',

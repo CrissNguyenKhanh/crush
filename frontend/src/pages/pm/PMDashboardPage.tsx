@@ -29,6 +29,7 @@ import {
 import { useNavigate } from "react-router-dom";
 
 import { pmApi } from "../../api/pm";
+import { unwrapListResponse } from "../../utils/api-response";
 
 import { summarizeTaskRisks } from "../../utils/pm/taskRisk";
 
@@ -420,8 +421,7 @@ export const PMDashboardPage: React.FC = () => {
 
       const projectsResponse = await pmApi.getMyProjects();
 
-      const projectList: ProjectItem[] =
-        projectsResponse?.data?.data ?? projectsResponse?.data ?? [];
+      const projectList = unwrapListResponse<ProjectItem>(projectsResponse);
 
       // ==================================
       // EACH PROJECT
@@ -435,8 +435,7 @@ export const PMDashboardPage: React.FC = () => {
 
           const sprintResponse = await pmApi.getSprintsByProject(project.id);
 
-          const sprints: SprintApiItem[] =
-            sprintResponse?.data?.data ?? sprintResponse?.data ?? [];
+          const sprints = unwrapListResponse<SprintApiItem>(sprintResponse);
 
           const activeSprints = sprints.filter(isActiveSprint);
 
@@ -453,13 +452,10 @@ export const PMDashboardPage: React.FC = () => {
                   pmApi.getSprintUsers(sprint.id),
                 ]);
 
-                const tasks: TaskItem[] =
-                  taskResponse?.data?.data ?? taskResponse?.data ?? [];
+                const tasks = unwrapListResponse<TaskItem>(taskResponse);
 
-                const allocations: UserSprintItem[] =
-                  allocationResponse?.data?.data ??
-                  allocationResponse?.data ??
-                  [];
+                const allocations =
+                  unwrapListResponse<UserSprintItem>(allocationResponse);
 
                 return {
                   sprint,

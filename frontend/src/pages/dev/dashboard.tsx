@@ -8,6 +8,7 @@ import DevDashboardChartsRow from '../../components/dev/dashboard/charts-row';
 import DevDashboardHeroCard from '../../components/dev/dashboard/hero-card';
 import DevDashboardProjectTable from '../../components/dev/dashboard/project-table';
 import DevDashboardStatsRow from '../../components/dev/dashboard/stats-row';
+import { SprintInvitationsPanel } from '../../components/dev/SprintInvitationsPanel';
 import type {
     DevDashboardAccount,
     DevDashboardChartDatum,
@@ -17,6 +18,17 @@ import type {
     DevDashboardSummary,
 } from '../../common/types/dev-dashboard';
 import type { ProjectItem } from '../../common/types/pm';
+import { unwrapListResponse } from '../../utils/api-response';
+
+interface DashboardNotificationPayload {
+    id: string | number;
+    title?: string;
+    description?: string;
+    message?: string;
+    createdAt?: string;
+    read?: boolean;
+    type?: string;
+}
 
 const PIE_COLORS = ['#1677ff', '#52c41a', '#fa8c16', '#f5222d', '#722ed1'];
 
@@ -146,16 +158,21 @@ const DashboardPage = () => {
             }
 
             if (notificationsRes.status === 'fulfilled') {
-                const notificationData = notificationsRes.value?.data?.data ?? [];
+                const notificationData = unwrapListResponse<DashboardNotificationPayload>(notificationsRes.value);
                 const normalized = Array.isArray(notificationData)
-                    ? notificationData.map((item: any) => ({
-                          id: String(item.id),
-                          title: item.title || 'Thông báo',
-                          description: item.description || item.message || 'Bạn có một thông báo mới.',
-                          createdAt: item.createdAt,
-                          read: Boolean(item.read),
-                          type: item.type === 'success' || item.type === 'warning' ? item.type : 'info',
-                      }))
+                    ? notificationData.map((item): DevDashboardNotificationItem => {
+                          const type: DevDashboardNotificationItem['type'] =
+                              item.type === 'success' || item.type === 'warning' ? item.type : 'info';
+
+                          return {
+                              id: String(item.id),
+                              title: item.title || 'Thông báo',
+                              description: item.description || item.message || 'Bạn có một thông báo mới.',
+                              createdAt: item.createdAt,
+                              read: Boolean(item.read),
+                              type,
+                          };
+                      })
                     : [];
                 setNotifications(normalized);
             } else {
@@ -240,6 +257,8 @@ const DashboardPage = () => {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <SprintInvitationsPanel />
+
             {error && <Alert type="warning" showIcon message="Dashboard đang hiển thị dữ liệu một phần" description={error} />}
 
             <DevDashboardHeroCard

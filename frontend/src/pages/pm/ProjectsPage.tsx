@@ -15,6 +15,7 @@ import {
 import { PlusOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { pmApi } from "../../api/pm"; // Đảm bảo đường dẫn đúng
+import { unwrapListResponse } from "../../utils/api-response";
 import type { ProjectItem } from "../../common/types/pm";
 import { MessageOutlined } from "@ant-design/icons";
 import { ProjectChatDrawer } from "../../components/pm/ProjectChatDrawer";
@@ -36,7 +37,7 @@ export const ProjectsPage: React.FC = () => {
     try {
 
       const res = await pmApi.getMyProjects();
-      setProjects(res?.data?.data ?? res?.data ?? []);
+      setProjects(unwrapListResponse<ProjectItem>(res));
     } catch (error) {
       console.error("Lỗi khi tải danh sách dự án", error);
       message.error("Không thể tải danh sách dự án từ Server!");

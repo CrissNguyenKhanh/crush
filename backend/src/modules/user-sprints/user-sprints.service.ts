@@ -17,6 +17,7 @@ import {
 } from '../pm-realtime/pm-realtime.service';
 import { IUser } from 'common/types/user.interface';
 import { Project } from 'modules/projects/entities/project.entity';
+import { SprintAllocationInvitationService } from './sprint-allocation-invitation.service';
 
 @Injectable()
 export class UserSprintService {
@@ -35,6 +36,8 @@ export class UserSprintService {
 
     @InjectRepository(Project)
     private readonly projectRepo: Repository<Project>,
+
+    private readonly sprintAllocationInvitationService: SprintAllocationInvitationService,
   ) { }
 
   // ==========================================
@@ -325,7 +328,9 @@ export class UserSprintService {
       },
       relations: {
         user: true,
-        sprint: true,
+        sprint: {
+          project: true,
+        },
       },
     });
 
@@ -356,6 +361,18 @@ export class UserSprintService {
     const savedAllocation = await this.userSprintRepo.save(allocation);
 
     await this.publishAllocationChanged(savedAllocation, 'STATUS_CHANGED');
+
+    await this.sprintAllocationInvitationService.send({
+      userId: savedAllocation.userId,
+      allocationId: savedAllocation.id,
+      sprintId: allocation.sprint.id,
+      sprintName: allocation.sprint.name ?? 'Sprint',
+      projectId: allocation.sprint.projectId,
+      projectName: allocation.sprint.project?.name ?? 'Dự án',
+      percentage: Number(savedAllocation.percitant ?? 0),
+      startDate: allocation.sprint.startDate ?? null,
+      endDate: allocation.sprint.endDate ?? null,
+    });
 
     return savedAllocation;
   }
@@ -490,129 +507,28 @@ export class UserSprintService {
       where: {
         id,
       },
-
-      relations: {
-        sprint: true,
-      },
     });
 
     if (!record) {
-      throw new NotFoundException('Không tìm thấy bản ghi phân bổ này!');
-    }
-
-    if (!record.sprint) {
-      throw new NotFoundException('Không tìm thấy Sprint của allocation.');
-    }
-
-    // ==========================================
-    // VALID TARGET STATUS
-    // ==========================================
-
-    const validStatuses = Object.values(UserSprintStatus);
-
-    if (!validStatuses.includes(status)) {
-      throw new BadRequestException({
-        code: 'INVALID_ALLOCATION_STATUS',
-
-        message: 'Trạng thái allocation không hợp lệ.',
-
-        requestedStatus: status,
+      throw new NotFoundException({
+        code: 'ALLOCATION_NOT_FOUND',
+        message: 'Không tìm thấy bản ghi phân bổ.',
       });
     }
 
-    // ==========================================
-    // TERMINAL SPRINT
-    // ==========================================
-
-    this.assertSprintMutable(record.sprint);
-
-    // ==========================================
-    // SAME STATUS
-    // ==========================================
-
-    if (record.status === status) {
-      return record;
-    }
-
-    // ==========================================
-    // RELEASE KHÔNG ĐƯỢC BYPASS
-    // ==========================================
-    //
-    // Release phải đi qua:
-    //
-    // PATCH /user-sprint/:id/release
-    //
-    // vì endpoint đó:
-    // - check unfinished Task
-    // - lưu hard skill
-    // - lưu soft skill
-    // - lưu review
-    // ==========================================
-
-    if (status === UserSprintStatus.RELEASED) {
-      throw new ConflictException({
-        code: 'USE_RELEASE_WORKFLOW',
-
-        message:
-          'Không thể chuyển trực tiếp allocation sang RELEASED. Hãy sử dụng quy trình Release & Review.',
+    if (status === UserSprintStatus.ASSIGNED) {
+      throw new ForbiddenException({
+        code: 'DEV_RESPONSE_REQUIRED',
+        message: 'Nhân sự phải tự chấp nhận lời mời Sprint.',
       });
     }
 
-    // ==========================================
-    // STATE MACHINE
-    // ==========================================
-    //
-    // REQUESTED
-    //      ↓ dedicated endpoint submit-approval
-    //
-    // PENDING_APPROVAL
-    //      ↓
-    // ASSIGNED
-    //
-    // ASSIGNED
-    //      ↓ dedicated release endpoint
-    //
-    // RELEASED
-    //      terminal
-    // ==========================================
-
-    if (
-      record.status !== UserSprintStatus.PENDING_APPROVAL ||
-      status !== UserSprintStatus.ASSIGNED
-    ) {
-      throw new ConflictException({
-        code: 'INVALID_ALLOCATION_TRANSITION',
-
-        message: `Không thể chuyển allocation từ ${record.status} sang ${status}.`,
-
-        currentStatus: record.status,
-
-        requestedStatus: status,
-
-        allowedTransition:
-          record.status === UserSprintStatus.PENDING_APPROVAL
-            ? UserSprintStatus.ASSIGNED
-            : null,
-      });
-    }
-
-    // ==========================================
-    // RE-CHECK CAPACITY
-    // ==========================================
-
-    await this.assertAllocationCapacityBeforeAssign(record);
-
-    // ==========================================
-    // APPROVE
-    // ==========================================
-
-    record.status = UserSprintStatus.ASSIGNED;
-
-    const savedAllocation = await this.userSprintRepo.save(record);
-
-    await this.publishAllocationChanged(savedAllocation, 'ASSIGNED');
-
-    return savedAllocation;
+    throw new ConflictException({
+      code: 'INVALID_ALLOCATION_TRANSITION',
+      message: 'Không thể thay đổi Allocation bằng endpoint này.',
+      currentStatus: record.status,
+      requestedStatus: status,
+    });
   }
 
   private async assertUserCanBeReleasedFromSprint(

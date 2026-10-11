@@ -4,18 +4,12 @@ import {
   Patch,
   Param,
   Body,
-  Logger,
-  Get,
 } from '@nestjs/common';
 import {
   SkillEvidencesService,
   VerifyEvidenceDto,
 } from './skill-evidences.service';
-import {
-  ResponseMessage,
-  User,
-  SkipCheckPermission,
-} from 'decorator/customize';
+import { SkipCheckPermission } from 'decorator/customize';
 // import { NotificationsGateway } from '../notifications/notifications.gateway';
 
 @Controller('skill-evidences')
@@ -28,8 +22,6 @@ export class SkillEvidencesController {
   @SkipCheckPermission()
   @Post()
   async submitEvidence(@Body() body: any) {
-   
-    Logger.debug('tao là khánh', body);
     // Gọi hàm uploadEvidence trong Service.
     // Hàm này sẽ tự động: Lưu DB -> Lấy ra ID mới -> Bắn Socket rung chuông!
     const savedEvidence = await this.evidencesService.uploadEvidence(body);

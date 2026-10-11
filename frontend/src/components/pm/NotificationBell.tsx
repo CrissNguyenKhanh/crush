@@ -9,11 +9,9 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 
-// Socket dùng chung toàn app
-// import { socket, connectSocket } from "../../config/socket";
-
 // API của PM
 import { pmApi } from "../../api/pm";
+import { unwrapListResponse } from "../../utils/api-response";
 
 const { Text } = Typography;
 
@@ -90,7 +88,7 @@ export const NotificationBell: React.FC = () => {
 
       const res = await pmApi.getNotificationHistory();
 
-      const data = (res as any)?.data ?? [];
+      const data = unwrapListResponse<Notification>(res);
 
       if (Array.isArray(data)) {
         const formattedData: Notification[] = data.map(formatNotification);
@@ -124,6 +122,10 @@ export const NotificationBell: React.FC = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    void fetchNotificationHistory();
+  }, []);
 
   // =========================================================
   // 2. SOCKET REALTIME

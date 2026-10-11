@@ -2,12 +2,13 @@ import React, { useState } from "react";
 import {
   Button,
   message,
-  Modal,
   Progress,
   Space,
   Table,
   Tag,
   Typography,
+  InputNumber,
+  Modal,
 } from "antd";
 
 import type { UserSprintItem } from "../../../common/types/pm";
@@ -40,7 +41,7 @@ const STATUS_CONFIG: Record<
   },
 
   PENDING_APPROVAL: {
-    label: "Chờ phê duyệt",
+    label: "Chờ Dev phản hồi",
     color: "gold",
   },
 
@@ -52,6 +53,11 @@ const STATUS_CONFIG: Record<
   RELEASED: {
     label: "Đã kết thúc",
     color: "default",
+  },
+  DECLINED: {
+    label: "Dev đã từ chối",
+
+    color: "red",
   },
 };
 
@@ -67,6 +73,12 @@ export const SprintAllocationTable: React.FC<Props> = ({
   // ==========================================
 
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+
+  const [retryTarget, setRetryTarget] = useState<any | null>(null);
+
+  const [retryPercentage, setRetryPercentage] = useState<number | null>(null);
+
+  const [retryLoading, setRetryLoading] = useState(false);
 
   // ==========================================
   // SUBMIT FOR APPROVAL
@@ -131,7 +143,45 @@ export const SprintAllocationTable: React.FC<Props> = ({
       },
     });
   };
+  // ==========================================
+  // RETRY INVITATION
+  // ==========================================
 
+  const handleRetryInvitation = async () => {
+    if (!retryTarget) {
+      return;
+    }
+
+    if (
+      retryPercentage === null ||
+      retryPercentage <= 0 ||
+      retryPercentage > 100
+    ) {
+      message.warning("Allocation phải nằm trong khoảng 1% - 100%.");
+      return;
+    }
+
+    try {
+      setRetryLoading(true);
+
+      await pmApi.retrySprintInvitation(retryTarget.id, retryPercentage);
+
+      message.success("Đã gửi lại lời mời Sprint.");
+
+      setRetryTarget(null);
+      setRetryPercentage(null);
+
+      await onRefresh();
+    } catch (error: any) {
+      console.error("Lỗi gửi lại lời mời Sprint:", error);
+
+      const errorData = error?.response?.data;
+
+      message.error(errorData?.message ?? "Không thể gửi lại lời mời Sprint.");
+    } finally {
+      setRetryLoading(false);
+    }
+  };
   // ==========================================
   // TABLE COLUMNS
   // ==========================================
@@ -247,7 +297,7 @@ export const SprintAllocationTable: React.FC<Props> = ({
                   void handleSubmitApproval(record);
                 }}
               >
-                Gửi phê duyệt
+                Gửi lời mời
               </Button>
 
               <Button
@@ -267,12 +317,30 @@ export const SprintAllocationTable: React.FC<Props> = ({
         // ------------------------------------
 
         if (status === "PENDING_APPROVAL") {
-          return <Text type="warning">Đang chờ phê duyệt</Text>;
+          return <Text type="warning"> Đang chờ Dev phản hồi</Text>;
         }
 
         // ------------------------------------
         // ASSIGNED
         // ------------------------------------
+        if (status === "DECLINED") {
+          return (
+            <Space direction="vertical" size={4}>
+              <Text type="danger">Dev đã từ chối</Text>
+
+              <Button
+                size="small"
+                onClick={() => {
+                  setRetryTarget(record);
+
+                  setRetryPercentage(Number(record.percitant ?? 0));
+                }}
+              >
+                Gửi lại lời mời
+              </Button>
+            </Space>
+          );
+        }
 
         if (status === "ASSIGNED") {
           return (
@@ -306,15 +374,70 @@ export const SprintAllocationTable: React.FC<Props> = ({
   // ==========================================
 
   return (
-    <Table
-      columns={columns}
-      dataSource={userSprints}
-      rowKey="id"
-      loading={loading}
-      pagination={{
-        pageSize: 8,
-        showSizeChanger: false,
-      }}
-    />
+    <>
+      <Table
+        columns={columns}
+        dataSource={userSprints}
+        rowKey="id"
+        loading={loading}
+        pagination={{
+          pageSize: 8,
+          showSizeChanger: false,
+        }}
+      />
+
+      <Modal
+        title="Gửi lại lời mời Sprint"
+        open={Boolean(retryTarget)}
+        onCancel={() => {
+          setRetryTarget(null);
+          setRetryPercentage(null);
+        }}
+        okText="Gửi lại"
+        cancelText="Hủy"
+        confirmLoading={retryLoading}
+        onOk={() => {
+          void handleRetryInvitation();
+        }}
+        destroyOnHidden
+      >
+        <Space
+          direction="vertical"
+          size={12}
+          style={{
+            width: "100%",
+          }}
+        >
+          <Text>
+            Nhân sự: <Text strong>{retryTarget?.user?.fullName ?? "N/A"}</Text>
+          </Text>
+
+          {retryTarget?.responseReason && (
+            <Text type="secondary">
+              Lý do từ chối: {retryTarget.responseReason}
+            </Text>
+          )}
+
+          <div>
+            <Text strong>Allocation mới</Text>
+
+            <div style={{ marginTop: 8 }}>
+              <InputNumber
+                min={1}
+                max={100}
+                value={retryPercentage}
+                onChange={(value) => {
+                  setRetryPercentage(value);
+                }}
+                addonAfter="%"
+                style={{
+                  width: "100%",
+                }}
+              />
+            </div>
+          </div>
+        </Space>
+      </Modal>
+    </>
   );
 };

@@ -1,14 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Table,
-  Tag,
   Button,
   Badge,
   message,
   Card,
   Row,
   Col,
-  Statistic,
   Alert,
   Input,
   Avatar,
@@ -29,6 +27,7 @@ import {
 } from "@ant-design/icons";
 import type { TeamMember, EmployeeStatus } from "../../common/types/pm";
 import { pmApi } from "../../api/pm";
+import { unwrapListResponse } from "../../utils/api-response";
 import { EvidenceApprovalModal } from "../../components/pm/sprints/EvidenceApprovalModal";
 
 const { Title, Text } = Typography;
@@ -90,10 +89,7 @@ export const MyTeamPage: React.FC = () => {
   try {
     const res = await pmApi.getMyTeam();
 
-    const newTeam: TeamMember[] =
-      res?.data?.data || res?.data || [];
-
-    console.log("My Team data:", newTeam);
+    const newTeam = unwrapListResponse<TeamMember>(res);
 
     // Cập nhật bảng My Team
     setTeam(newTeam);
@@ -277,7 +273,7 @@ export const MyTeamPage: React.FC = () => {
   ];
 
   const totalMembers = team.length;
-  const benchMembers = team.filter((m) => m.status === "bench");
+  const benchMembers = team.filter((m) => m.status === "BENCH");
   const benchCount = benchMembers.length;
   const longBenchMembers = benchMembers;
 

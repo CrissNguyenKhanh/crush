@@ -12,16 +12,26 @@ import { PmRealtimeModule } from '../pm-realtime/pm-realtime.module';
 import { PmAccessModule } from '../pm-access/pm-access.module';
 import { ProjectsModule } from 'modules/projects/projects.module';
 import { Project } from 'modules/projects/entities/project.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { SprintAllocationInvitationService } from './sprint-allocation-invitation.service';
+import { SprintAllocationResponseService } from './sprint-allocation-response.service';
+import { SprintAllocationRetryService } from './sprint-allocation-retry.service';
 @Module({
   imports: [
-    TypeOrmModule.forFeature([UserSprint, Sprint, User, Task,Project]),
+    TypeOrmModule.forFeature([UserSprint, Sprint, User, Task, Project]),
     PmRealtimeModule,
     PmAccessModule,
-    ProjectsModule
+    ProjectsModule,
+    NotificationsModule,
   ],
 
   controllers: [UserSprintController],
 
-  providers: [UserSprintService],
+  providers: [
+    UserSprintService,
+    SprintAllocationInvitationService,
+    SprintAllocationResponseService,
+    SprintAllocationRetryService,
+  ],
 })
 export class UserSprintsModule {}

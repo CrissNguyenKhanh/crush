@@ -14,6 +14,7 @@ import {
 import {
   DashboardOutlined,
   DatabaseOutlined,
+  AlertOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ProjectOutlined,
@@ -136,6 +137,8 @@ const LayoutPM = () => {
       setSelectedKey("projects");
     } else if (path.includes("/pm/resources")) {
       setSelectedKey("resources");
+    } else if (path.includes("/pm/action-center")) {
+      setSelectedKey("action-center");
     } else if (path.includes("/pm/projects")) {
       setSelectedKey("projects");
     }
@@ -207,6 +210,12 @@ const LayoutPM = () => {
               icon: <DatabaseOutlined />,
               label: "Tài nguyên",
               onClick: () => navigate("/pm/resources"),
+            },
+            {
+              key: "action-center",
+              icon: <AlertOutlined />,
+              label: "Việc cần xử lý",
+              onClick: () => navigate("/pm/action-center"),
             },
           ]}
         />

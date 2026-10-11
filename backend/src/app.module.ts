@@ -47,6 +47,7 @@ import { PmRealtimeModule } from './modules/pm-realtime/pm-realtime.module';
 
 import { ChatModule } from 'modules/chat/chat.module';
 import { ChatMessage } from 'modules/chat/entities/chat-message.entity';
+import { PmActionCenterModule } from './modules/pm-action-center/pm-action-center.module';
 
 @Module({
   imports: [
@@ -111,6 +112,7 @@ import { ChatMessage } from 'modules/chat/entities/chat-message.entity';
     WebsocketModule,
     PmRealtimeModule,
     ChatModule,
+    PmActionCenterModule,
   ],
   controllers: [AppController],
   providers: [AppService],

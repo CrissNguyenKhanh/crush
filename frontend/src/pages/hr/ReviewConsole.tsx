@@ -528,6 +528,7 @@ const ReviewConsole: React.FC = () => {
                         <Text strong style={{ fontSize: 15 }}>Danh sách đánh giá</Text>
                     </Flex>
                 }
+                tableExtra={loading ? <Spin size="small" /> : undefined}
             />
         </div>
 
