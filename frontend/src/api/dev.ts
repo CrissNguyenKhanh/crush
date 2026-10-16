@@ -24,6 +24,9 @@ export const devApi = {
   getMySprintInvitations: () => {
     return axios.get<IBackendRes<SprintInvitationItem[]>>(
       "/user-sprint/my-invitations",
+      {
+        suppressGlobalErrorToast: true,
+      },
     );
   },
 
@@ -40,6 +43,9 @@ export const devApi = {
         decision,
 
         reason,
+      },
+      {
+        suppressGlobalErrorToast: true,
       },
     );
   },

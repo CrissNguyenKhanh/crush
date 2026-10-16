@@ -95,7 +95,6 @@ const LayoutPM = () => {
     connectSocket('/user-skills');
     const socket = getSocket('/user-skills');
     const handleUpdated = (message: any) => {
-      console.log('Nhận thông báo từ server:', message);
       messageApi.open({
         type: 'success',
         content: message.message,

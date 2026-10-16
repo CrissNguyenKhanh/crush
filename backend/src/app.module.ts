@@ -48,11 +48,13 @@ import { PmRealtimeModule } from './modules/pm-realtime/pm-realtime.module';
 import { ChatModule } from 'modules/chat/chat.module';
 import { ChatMessage } from 'modules/chat/entities/chat-message.entity';
 import { PmActionCenterModule } from './modules/pm-action-center/pm-action-center.module';
+import { validateEnvironment } from './config/environment';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validate: validateEnvironment,
     }),
 
     TypeOrmModule.forRootAsync({

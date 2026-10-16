@@ -13,6 +13,7 @@ import {
 
 import type { UserSprintItem } from "../../../common/types/pm";
 import { pmApi } from "../../../api/pm";
+import { getApiErrorMessage } from "../../../utils/api-error";
 
 const { Text } = Typography;
 
@@ -74,7 +75,7 @@ export const SprintAllocationTable: React.FC<Props> = ({
 
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  const [retryTarget, setRetryTarget] = useState<any | null>(null);
+  const [retryTarget, setRetryTarget] = useState<UserSprintItem | null>(null);
 
   const [retryPercentage, setRetryPercentage] = useState<number | null>(null);
 
@@ -93,12 +94,12 @@ export const SprintAllocationTable: React.FC<Props> = ({
       message.success("Đã gửi yêu cầu để phê duyệt.");
 
       await onRefresh();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Lỗi gửi phê duyệt:", error);
 
-      const errorData = error?.response?.data;
-
-      message.error(errorData?.message ?? "Không thể gửi yêu cầu phê duyệt.");
+      message.error(
+        getApiErrorMessage(error, "Không thể gửi yêu cầu phê duyệt."),
+      );
     } finally {
       setActionLoadingId(null);
     }
@@ -131,12 +132,10 @@ export const SprintAllocationTable: React.FC<Props> = ({
           message.success("Đã hủy yêu cầu phân bổ.");
 
           await onRefresh();
-        } catch (error: any) {
+        } catch (error: unknown) {
           console.error("Lỗi hủy allocation:", error);
 
-          const errorData = error?.response?.data;
-
-          message.error(errorData?.message ?? "Không thể hủy yêu cầu.");
+          message.error(getApiErrorMessage(error, "Không thể hủy yêu cầu."));
         } finally {
           setActionLoadingId(null);
         }
@@ -172,12 +171,12 @@ export const SprintAllocationTable: React.FC<Props> = ({
       setRetryPercentage(null);
 
       await onRefresh();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Lỗi gửi lại lời mời Sprint:", error);
 
-      const errorData = error?.response?.data;
-
-      message.error(errorData?.message ?? "Không thể gửi lại lời mời Sprint.");
+      message.error(
+        getApiErrorMessage(error, "Không thể gửi lại lời mời Sprint."),
+      );
     } finally {
       setRetryLoading(false);
     }

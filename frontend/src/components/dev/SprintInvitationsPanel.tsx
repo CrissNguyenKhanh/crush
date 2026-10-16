@@ -20,22 +20,9 @@ import { devApi, type SprintInvitationItem } from "../../api/dev";
 
 import { socket } from "../../config/socket.config";
 import { unwrapListResponse } from "../../utils/api-response";
+import { getApiErrorData } from "../../utils/api-error";
 
 const { Text, Title } = Typography;
-
-interface ApiErrorData {
-  code?: string;
-  message?: string;
-  error?: { code?: string };
-}
-
-const getApiErrorData = (error: unknown): ApiErrorData => {
-  const candidate = error as ApiErrorData & {
-    response?: { data?: ApiErrorData };
-  };
-
-  return candidate.response?.data ?? candidate;
-};
 
 export const SprintInvitationsPanel = () => {
   const [loading, setLoading] = useState(false);
@@ -70,7 +57,11 @@ export const SprintInvitationsPanel = () => {
   }, []);
 
   useEffect(() => {
-    void loadInvitations();
+    const loadTimer = window.setTimeout(() => {
+      void loadInvitations();
+    }, 0);
+
+    return () => window.clearTimeout(loadTimer);
   }, [loadInvitations]);
 
   // ========================================

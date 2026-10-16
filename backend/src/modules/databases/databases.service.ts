@@ -22,7 +22,7 @@ export class DatabasesService implements OnModuleInit {
     ) { }
 
     async onModuleInit() {
-        const isInit = this.configService.get<boolean>("INIT_DATABASE");
+        const isInit = this.configService.get<boolean>("INIT_DATABASE", false);
 
         if (isInit) {
             const countUser = await this.userepository.count();

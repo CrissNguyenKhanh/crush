@@ -35,6 +35,8 @@ import TalentManagement from "./pages/hr/TalentManagement";
 import UserPorjectPage from "./pages/dev/project";
 import DevProjectDetail from "./pages/dev/project-detail";
 import SkillTreePage from "./pages/dev/skill-tree";
+import ProtectedRoute from "./components/auth/ProtectedRoute";
+import NotPermittedPage from "./pages/result/not-permitted";
 
 function App() {
   const dispatch = useAppDispatch();
@@ -50,7 +52,11 @@ function App() {
     },
     {
       path: "/admin",
-      element: <LayoutAdmin />,
+      element: (
+        <ProtectedRoute allowedRoles={["ADMIN"]}>
+          <LayoutAdmin />
+        </ProtectedRoute>
+      ),
       errorElement: <ErrorPage />,
       children: [
         { index: true, element: <DashboardPage /> },
@@ -61,7 +67,11 @@ function App() {
     },
     {
       path: "/hr",
-      element: <LayoutHR />,
+      element: (
+        <ProtectedRoute allowedRoles={["HR"]}>
+          <LayoutHR />
+        </ProtectedRoute>
+      ),
       errorElement: <ErrorPage />,
       children: [
         { index: true, element: <HRDashboard /> },
@@ -75,7 +85,11 @@ function App() {
 
     {
       path: "/pm",
-      element: <LayoutPM />,
+      element: (
+        <ProtectedRoute allowedRoles={["PM"]}>
+          <LayoutPM />
+        </ProtectedRoute>
+      ),
       children: [
         {
           index: true,
@@ -114,7 +128,11 @@ function App() {
 
     {
       path: "/developer",
-      element: <DeveloperLayout />,
+      element: (
+        <ProtectedRoute allowedRoles={["DEVELOPER"]}>
+          <DeveloperLayout />
+        </ProtectedRoute>
+      ),
       errorElement: <ErrorPage />,
       children: [
         {
@@ -151,6 +169,10 @@ function App() {
     {
       path: "/register",
       element: <div>Register</div>,
+    },
+    {
+      path: "/403",
+      element: <NotPermittedPage />,
     },
     {
       path: "*",

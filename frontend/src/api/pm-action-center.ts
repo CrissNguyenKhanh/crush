@@ -100,5 +100,8 @@ export const pmActionCenterApi = {
         >
       >(
         "/pm-action-center",
+        {
+          suppressGlobalErrorToast: true,
+        },
       ),
 };

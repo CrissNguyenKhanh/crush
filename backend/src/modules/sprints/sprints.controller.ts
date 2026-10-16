@@ -364,6 +364,13 @@ export class SprintsController {
 
     await this.pmAccessService.assertSprintAccess(currentUserId, id);
 
+    if (updateSprintDto.projectId !== undefined) {
+      await this.pmAccessService.assertProjectAccess(
+        currentUserId,
+        updateSprintDto.projectId,
+      );
+    }
+
     const data = await this.sprintsService.update(id, updateSprintDto);
 
     return {

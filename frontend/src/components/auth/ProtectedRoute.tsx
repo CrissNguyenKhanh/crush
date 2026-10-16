@@ -1,13 +1,21 @@
 import { Navigate, Outlet } from "react-router-dom";
 import { Spin } from "antd";
+import type { ReactNode } from "react";
 import { useAppSelector } from "../../hooks/hooks";
 
 /** All role names recognised by the system. Extend as new roles are added. */
-export type RoleName = "ADMIN" | "HR" | "DEV" | "BA" | "TESTER" | "PM";
+export type RoleName =
+  | "ADMIN"
+  | "HR"
+  | "DEVELOPER"
+  | "BA"
+  | "TESTER"
+  | "PM";
 
 interface IProps {
   /** Roles that are permitted to access the child routes. */
   allowedRoles: RoleName[];
+  children?: ReactNode;
 }
 
 /**
@@ -17,7 +25,7 @@ interface IProps {
  *  3. Redirects authenticated users whose role is not in allowedRoles to /403.
  *  4. Renders <Outlet /> for authorised users.
  */
-const ProtectedRoute = ({ allowedRoles }: IProps) => {
+const ProtectedRoute = ({ allowedRoles, children }: IProps) => {
   const { isLoading, isAuthenticated, user } = useAppSelector(
     (state) => state.account,
   );
@@ -43,19 +51,14 @@ const ProtectedRoute = ({ allowedRoles }: IProps) => {
     return <Navigate to="/login" replace />;
   }
 
-  // ── 3. Temporary bypass for PM development: if no role is attached yet,
-  //     default to PM so the developer can continue feature work.
-  const userRole = (user?.role?.name ?? "pm").toLowerCase() as RoleName;
-  const allowedSet = allowedRoles.map((role) => role.toLowerCase());
+  const userRole = user?.role?.name?.toUpperCase() as RoleName | undefined;
 
-  if (!allowedSet.includes(userRole)) {
-    return (
-      <Navigate to={`/${allowedRoles[0]?.toLowerCase() ?? "pm"}`} replace />
-    );
+  if (!userRole || !allowedRoles.includes(userRole)) {
+    return <Navigate to="/403" replace />;
   }
 
-  // ── 4. Authorised — render child routes via <Outlet /> ─────────────────
-  return <Outlet />;
+  // ── 4. Authorised — render wrapped content or nested routes ────────────
+  return children ?? <Outlet />;
 };
 
 export default ProtectedRoute;

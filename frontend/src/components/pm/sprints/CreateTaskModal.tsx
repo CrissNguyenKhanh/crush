@@ -83,8 +83,6 @@ export const CreateTaskModal: React.FC<Props> = ({
         requiredSkills: values.requiredSkills ?? [],
       };
 
-      console.log("[CREATE TASK PAYLOAD]", formattedData);
-
       await pmApi.createTask(formattedData);
 
       message.success("Tạo Task thành công!");

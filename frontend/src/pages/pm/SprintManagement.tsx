@@ -423,9 +423,7 @@ export const SprintManagementPage: React.FC = () => {
 
     sprintId: sprintId ?? null,
 
-    onChange: async (event) => {
-      console.log("[PM Realtime] Sprint refresh:", event);
-
+    onChange: async () => {
       await fetchSprintData();
     },
   });

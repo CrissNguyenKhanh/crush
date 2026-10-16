@@ -402,8 +402,7 @@ const SkillPage = () => {
       <ModalCreateSkill
         open={skillModalOpen}
         onCancel={() => setSkillModalOpen(false)}
-        onSuccess={(skill) => {
-          console.log("Skill mới:", skill);
+        onSuccess={() => {
           setSkillModalOpen(false);
           handleRefresh();
         }}

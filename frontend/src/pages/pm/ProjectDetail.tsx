@@ -97,9 +97,7 @@ export const ProjectDetail: React.FC = () => {
   usePmProjectRealtime({
     projectId,
 
-    onChange: async (event) => {
-      console.log("[PM Realtime] ProjectDetail refresh:", event);
-
+    onChange: async () => {
       await fetchProjectDetails();
     },
   });

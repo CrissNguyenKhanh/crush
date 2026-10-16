@@ -36,6 +36,7 @@ import {
   type PmActionCenterItem,
 } from "../../api/pm-action-center";
 import { unwrapDataResponse } from "../../utils/api-response";
+import { getApiErrorMessage } from "../../utils/api-error";
 
 const { Text, Title } = Typography;
 
@@ -77,12 +78,11 @@ export const PMActionCenterPage = () => {
       const response = await pmActionCenterApi.getActionCenter();
 
       setData(unwrapDataResponse<PmActionCenterData>(response));
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Không tải được PM Action Center:", error);
 
       message.error(
-        error?.response?.data?.message ??
-          "Không thể tải danh sách việc cần xử lý.",
+        getApiErrorMessage(error, "Không thể tải danh sách việc cần xử lý."),
       );
     } finally {
       setLoading(false);
@@ -90,7 +90,11 @@ export const PMActionCenterPage = () => {
   }, []);
 
   useEffect(() => {
-    void load();
+    const loadTimer = window.setTimeout(() => {
+      void load();
+    }, 0);
+
+    return () => window.clearTimeout(loadTimer);
   }, [load]);
 
   const items = useMemo(() => {

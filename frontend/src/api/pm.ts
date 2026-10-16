@@ -52,6 +52,10 @@ export const pmApi = {
   submitAllocationForApproval: (id: string) => {
     return axios.patch<IBackendRes<UserSprintItem>>(
       `/user-sprint/${id}/submit-approval`,
+      undefined,
+      {
+        suppressGlobalErrorToast: true,
+      },
     );
   },
 
@@ -61,7 +65,9 @@ export const pmApi = {
         success: boolean;
         id: string;
       }>
-    >(`/user-sprint/${id}/request`);
+    >(`/user-sprint/${id}/request`, {
+      suppressGlobalErrorToast: true,
+    });
   },
 
   getSprintCompletionReadiness: (sprintId: string) => {
@@ -300,6 +306,9 @@ export const pmApi = {
       `/user-sprint/${allocationId}/retry-invitation`,
       {
         percentage,
+      },
+      {
+        suppressGlobalErrorToast: true,
       },
     ),
 };

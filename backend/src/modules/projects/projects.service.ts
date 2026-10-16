@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -61,6 +62,13 @@ export class ProjectsService {
         code: 'PROJECT_PRIMARY_PM_NOT_FOUND',
 
         message: 'Không tìm thấy Primary PM.',
+      });
+    }
+
+    if (!this.isProjectManagerRole(primaryPm.role?.name)) {
+      throw new ForbiddenException({
+        code: 'PM_ROLE_REQUIRED',
+        message: 'Chỉ người dùng có vai trò PM mới được tạo Project.',
       });
     }
 
