@@ -1,20 +1,56 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  Query,
+} from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import {
+  ResponseMessage,
+  User,
+  SkipCheckPermission,
+} from 'decorator/customize';
+import type { IUser } from 'common/types/user.interface';
 
+@SkipCheckPermission()
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) { }
 
   @Post()
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  @ResponseMessage('User created successfully')
+  create(@Body() createUserDto: CreateUserDto, @User() user: IUser) {
+   
+    return this.usersService.create(createUserDto, user);
   }
 
   @Get()
-  findAll() {
-    return this.usersService.findAll();
+  @SkipCheckPermission()
+  @ResponseMessage('Get Users with Pagination')
+  findAll(
+    @Query('current') currentPage: string,
+    @Query('pageSize') limit: string,
+    @Query() qs: string,
+  ) {
+    return this.usersService.findAll(+currentPage, +limit, qs);
+  }
+
+  @Get('count')
+  @ResponseMessage('Count users successfully')
+  countUser() {
+    return this.usersService.countUser();
+  }
+
+  @Get('count-disable-account')
+  @ResponseMessage('Count users successfully')
+  countDisableAccount() {
+    return this.usersService.countDisableAccount();
   }
 
   @Get(':id')
@@ -23,12 +59,33 @@ export class UsersController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.usersService.update(+id, updateUserDto);
+  @ResponseMessage('User updated successfully')
+  update(
+    @Param('id') id: string,
+    @Body() updateUserDto: UpdateUserDto,
+    @User() user: IUser,
+  ) {
+    return this.usersService.update(id, updateUserDto, user);
+  }
+  @Delete(':id')
+  remove(@Param('id') id: string, @User() user: IUser) {
+    return this.usersService.remove(id, user);
   }
 
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.usersService.remove(+id);
+  @Patch(':id/restore')
+  @ResponseMessage('User restored successfully')
+  restore(@Param('id') id: string, @User() user: IUser) {
+    return this.usersService.restore(id, user);
   }
+
+  @Get('pm/my-team')
+  async getMyTeam(@User() user: IUser) {
+    // Tạm thời hardcode ID của PM (ví dụ ID: '2ff0de6e-2759-4d11-aab7-42ca161f2933')
+    // Thực tế sẽ dùng: const managerId = req.user.id;
+    // const managerId = 'bcaa97b4-5b73-45e4-854e-a601e25745b7';
+    const data = await this.usersService.getMyTeam(user.id);
+    return { statusCode: 200, message: 'Lấy My Team thành công', data };
+  }
+
+
 }

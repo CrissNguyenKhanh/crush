@@ -1,0 +1,113 @@
+import type { EvidenceType, StatusEvidenceType, UserStatusType } from "../enum";
+
+export { };
+
+declare global {
+    /**
+     * Now declare things that go in the global namespace,
+     * or augment existing declarations in the global namespace.
+     */
+
+    interface IBackendRes<T> {
+        error?: string | string[];
+        message: string;
+        statusCode: number | string;
+        data?: T;
+    }
+
+    export interface IModelPaginate<T> {
+        meta: {
+            current: number;
+            pageSize: number;
+            pages: number;
+            total: number;
+        },
+        result: T[]
+    }
+
+    interface IAccount {
+        access_token: string;
+        user: {
+            id: string;
+            email: string;
+            fullName: string;
+            status: UserStatusType;
+            role: {
+                id: string;
+                name: string;
+            },
+            permissions: {
+                id: string;
+                name: string;
+                apiPath: string;
+                method: string;
+                module: string;
+            }[]
+        }
+    }
+
+    interface IGetAccount extends Omit<IAccount, "access_token"> { }
+
+    interface IUser {
+        id: string;
+        email: string;
+        password: string;
+        fullName: string;
+        status: UserStatusType;
+        role: {
+            id: string;
+            name: string;
+            description?: string;
+            permissions?: string[];
+        } | string;
+    }
+
+    interface ISkills {
+        id: string;
+        name: string;
+        description: string;
+        createdBy: string;
+        isDeleted: boolean;
+    }
+
+    interface IEviencesDTO {
+        type: EvidenceType;
+        title: string;
+        url: string;
+        description: string;
+    }
+
+    interface IEvidences {
+        id: string;
+        userSkillId: string;
+        type: EvidenceType;
+        title: string;
+        url: string;
+        description: string;
+        createdBy: {
+            id: string;
+            email: string;
+        },
+        isDeleted: boolean;
+        status: StatusEvidenceType;
+        rejectReason: string;
+    }
+
+    interface IUserSkill {
+        id: string;
+        userId: string;
+        skillId: string;
+        description: string;
+        level: number;
+        years: number;
+        evidenceNote: string;
+        confidenceScore: string;
+        evidences: IEvidences[];
+        createdBy: {
+            id: string;
+            email: string;
+        },
+        isDeleted: boolean;
+    }
+
+}

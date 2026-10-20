@@ -1,0 +1,2534 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+
+import { InjectRepository } from '@nestjs/typeorm';
+
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
+
+import dayjs from 'dayjs';
+
+import { CreateSprintDto } from './dto/create-sprint.dto';
+
+import { UpdateSprintDto } from './dto/update-sprint.dto';
+
+import {
+  SprintTargetStatus,
+  UpdateSprintStatusDto,
+} from './dto/update-sprint-status.dto';
+
+import { Sprint } from './entities/sprint.entity';
+
+import { Project } from '../projects/entities/project.entity';
+
+import { Task, TaskStatus } from '../task/entities/task.entity';
+
+import { PmRealtimeService } from '../pm-realtime/pm-realtime.service';
+import {
+  UserSprint,
+  UserSprintStatus,
+} from '../user-sprints/entities/user-sprint.entity';
+
+import { TaskDependenciesService } from '../task-dependencies/task-dependencies.service';
+import { User } from '../users/entities/user.entity';
+
+@Injectable()
+export class SprintsService {
+  constructor(
+    @InjectRepository(Sprint)
+    private readonly sprintRepo: Repository<Sprint>,
+
+    @InjectRepository(Project)
+    private readonly projectRepo: Repository<Project>,
+
+    @InjectRepository(Task)
+    private readonly taskRepo: Repository<Task>,
+
+    @InjectRepository(UserSprint)
+    private readonly userSprintRepo: Repository<UserSprint>,
+
+    private readonly taskDependenciesService: TaskDependenciesService,
+
+    private readonly pmRealtimeService: PmRealtimeService,
+    private readonly dataSource: DataSource,
+  ) {}
+
+  // ==========================================
+  // CREATE
+  // ==========================================
+
+  async create(createSprintDto: CreateSprintDto) {
+    return this.createSprint(createSprintDto);
+  }
+
+  // ==========================================
+  // FIND ALL
+  // ==========================================
+
+  async findAll() {
+    return await this.sprintRepo.find({
+      where: {
+        isDeleted: false,
+      },
+
+      relations: {
+        project: true,
+      },
+
+      order: {
+        startDate: 'ASC',
+      },
+    });
+  }
+
+  // ==========================================
+  // FIND ONE
+  // ==========================================
+
+  async findOne(id: string) {
+    const sprint = await this.sprintRepo.findOne({
+      where: {
+        id,
+        isDeleted: false,
+      },
+
+      relations: {
+        project: true,
+      },
+    });
+
+    if (!sprint) {
+      throw new NotFoundException({
+        code: 'SPRINT_NOT_FOUND',
+
+        message: 'Không tìm thấy Sprint.',
+      });
+    }
+
+    return sprint;
+  }
+
+  // ==========================================
+  // GET SPRINTS BY PROJECT
+  // ==========================================
+
+  async getSprintsByProject(projectId: string) {
+    await this.getProjectOrFail(projectId);
+
+    return await this.sprintRepo.find({
+      where: {
+        projectId,
+        isDeleted: false,
+      },
+
+      relations: {
+        project: true,
+      },
+
+      order: {
+        startDate: 'ASC',
+      },
+    });
+  }
+
+  // ==========================================
+  // CREATE SPRINT
+  // ==========================================
+
+  async createSprint(data: CreateSprintDto) {
+    const project = await this.getProjectOrFail(data.projectId);
+
+    const name = data.name?.trim();
+
+    if (!name) {
+      throw new BadRequestException({
+        code: 'INVALID_SPRINT_NAME',
+
+        message: 'Tên Sprint không được để trống.',
+      });
+    }
+
+    this.validateSprintDates(data.startDate, data.endDate);
+
+    this.validateSprintInsideProject(data.startDate, data.endDate, project);
+    await this.assertNoSprintOverlap(project.id, data.startDate, data.endDate);
+
+    const status = this.determineInitialStatus(data.startDate);
+
+    const attendant = this.normalizeAttendant(data.attendant);
+
+    const newSprint = this.sprintRepo.create({
+      name,
+
+      projectId: project.id,
+
+      project,
+
+      startDate: new Date(data.startDate),
+
+      endDate: new Date(data.endDate),
+
+      attendant,
+
+      status,
+
+      isDeleted: false,
+    });
+
+    const savedSprint = await this.sprintRepo.save(newSprint);
+
+    await this.pmRealtimeService.publishProjectChanged({
+      projectId: savedSprint.projectId,
+
+      sprintId: savedSprint.id,
+
+      entity: 'SPRINT',
+
+      action: 'CREATED',
+
+      entityId: savedSprint.id,
+    });
+
+    return savedSprint;
+  }
+
+  // ==========================================
+  // UPDATE INFORMATION
+  // ==========================================
+
+  async update(id: string, updateSprintDto: UpdateSprintDto) {
+    const sprint = await this.findOne(id);
+
+    const currentStatus = this.normalizeStatus(sprint.status);
+
+    if (currentStatus === 'COMPLETED' || currentStatus === 'CANCELLED') {
+      throw new ConflictException({
+        code: 'SPRINT_TERMINAL_STATE',
+
+        message: 'Sprint đã hoàn thành hoặc đã hủy nên không thể chỉnh sửa.',
+      });
+    }
+
+    const projectId = updateSprintDto.projectId ?? sprint.projectId;
+
+    const project = await this.getProjectOrFail(projectId);
+
+    const startDate = updateSprintDto.startDate ?? sprint.startDate;
+
+    const endDate = updateSprintDto.endDate ?? sprint.endDate;
+
+    this.validateSprintDates(startDate, endDate);
+
+    this.validateSprintInsideProject(startDate, endDate, project);
+    await this.assertNoSprintOverlap(project.id, startDate, endDate, sprint.id);
+    const timelineChanged =
+      updateSprintDto.startDate !== undefined ||
+      updateSprintDto.endDate !== undefined;
+
+    if (timelineChanged) {
+      await this.assertSprintTimelineChangeSafe(sprint, startDate, endDate);
+    }
+
+    // ========================================
+    // ACTIVE SPRINT CANNOT MOVE TO FUTURE
+    // ========================================
+
+    if (
+      currentStatus === 'ACTIVE' &&
+      dayjs(startDate).isAfter(dayjs(), 'day')
+    ) {
+      throw new ConflictException({
+        code: 'INVALID_ACTIVE_SPRINT_TIMELINE',
+
+        message:
+          'Sprint đang ACTIVE không thể đổi ngày bắt đầu sang tương lai.',
+      });
+    }
+
+    // ========================================
+    // NAME
+    // ========================================
+
+    if (updateSprintDto.name !== undefined) {
+      const normalizedName = updateSprintDto.name.trim();
+
+      if (!normalizedName) {
+        throw new BadRequestException({
+          code: 'INVALID_SPRINT_NAME',
+
+          message: 'Tên Sprint không được để trống.',
+        });
+      }
+
+      sprint.name = normalizedName;
+    }
+
+    // ========================================
+    // PROJECT
+    // ========================================
+
+    if (updateSprintDto.projectId !== undefined) {
+      sprint.projectId = project.id;
+
+      sprint.project = project;
+    }
+
+    // ========================================
+    // START DATE
+    // ========================================
+
+    if (updateSprintDto.startDate !== undefined) {
+      sprint.startDate = new Date(updateSprintDto.startDate);
+    }
+
+    // ========================================
+    // END DATE
+    // ========================================
+
+    if (updateSprintDto.endDate !== undefined) {
+      sprint.endDate = new Date(updateSprintDto.endDate);
+    }
+
+    // ========================================
+    // ATTENDANT
+    // ========================================
+
+    if (updateSprintDto.attendant !== undefined) {
+      sprint.attendant = this.normalizeAttendant(updateSprintDto.attendant);
+    }
+
+    // ========================================
+    // IMPORTANT
+    //
+    // Không tự động đổi status ở PATCH info.
+    //
+    // Status chỉ thay đổi thông qua:
+    //
+    // PATCH /sprints/:id/status
+    // ========================================
+
+    const savedSprint = timelineChanged
+      ? await this.saveTimelineUpdateWithLocks(sprint)
+      : await this.sprintRepo.save(sprint);
+
+    await this.pmRealtimeService.publishProjectChanged({
+      projectId: savedSprint.projectId,
+
+      sprintId: savedSprint.id,
+
+      entity: 'SPRINT',
+
+      action: 'UPDATED',
+
+      entityId: savedSprint.id,
+    });
+
+    return savedSprint;
+  }
+
+  // ==========================================
+  // UPDATE LIFECYCLE STATUS
+  // ==========================================
+
+  async updateStatus(id: string, dto: UpdateSprintStatusDto) {
+    const sprint = await this.findOne(id);
+
+    const currentStatus = this.normalizeStatus(sprint.status);
+
+    const targetStatus = this.normalizeStatus(dto.status);
+
+    // ========================================
+    // SAME STATUS
+    // ========================================
+
+    if (currentStatus === targetStatus) {
+      return sprint;
+    }
+
+    // ========================================
+    // TERMINAL STATE
+    // ========================================
+
+    if (currentStatus === 'COMPLETED' || currentStatus === 'CANCELLED') {
+      throw new ConflictException({
+        code: 'SPRINT_TERMINAL_STATE',
+
+        message:
+          'Sprint đã hoàn thành hoặc đã hủy nên không thể chuyển trạng thái.',
+        currentStatus: sprint.status,
+        requestedStatus: dto.status,
+      });
+    }
+
+    // ========================================
+    // VALID TRANSITION
+    // ========================================
+
+    const allowedTransitions: Record<string, string[]> = {
+      UPCOMING: ['ACTIVE', 'CANCELLED'],
+
+      ACTIVE: ['COMPLETED', 'CANCELLED'],
+    };
+
+    const allowed = allowedTransitions[currentStatus] ?? [];
+
+    if (!allowed.includes(targetStatus)) {
+      throw new ConflictException({
+        code: 'INVALID_SPRINT_TRANSITION',
+
+        message: `Không thể chuyển Sprint từ ${currentStatus} sang ${targetStatus}.`,
+
+        currentStatus: sprint.status,
+
+        requestedStatus: dto.status,
+
+        allowedTransitions: allowed.map((status) => status.toLowerCase()),
+      });
+    }
+
+    // ========================================
+    // UPCOMING -> ACTIVE
+    // ========================================
+
+    if (dto.status === SprintTargetStatus.ACTIVE) {
+      await this.assertSprintCanStart(sprint);
+    }
+
+    // ========================================
+    // ACTIVE -> COMPLETED
+    // ========================================
+
+    if (dto.status === SprintTargetStatus.COMPLETED) {
+      await this.assertSprintCanComplete(sprint);
+    }
+
+    // ========================================
+    // -> CANCELLED
+    // ========================================
+
+    if (dto.status === SprintTargetStatus.CANCELLED) {
+      await this.prepareSprintCancellation(sprint);
+    }
+
+    sprint.status = dto.status;
+
+    const savedSprint = await this.sprintRepo.save(sprint);
+
+    await this.pmRealtimeService.publishProjectChanged({
+      projectId: savedSprint.projectId,
+
+      sprintId: savedSprint.id,
+
+      entity: 'SPRINT',
+
+      action: 'STATUS_CHANGED',
+
+      entityId: savedSprint.id,
+    });
+
+    return savedSprint;
+  }
+
+  // ==========================================
+  // START GUARD
+  // ==========================================
+
+  async getStartReadiness(sprintId: string) {
+    const sprint = await this.findOne(sprintId);
+
+    const tasks = await this.taskRepo.find({
+      where: {
+        sprintId: sprint.id,
+
+        isDeleted: false,
+      },
+    });
+
+    const allocations = await this.userSprintRepo.find({
+      where: {
+        sprintId: sprint.id,
+      },
+    });
+
+    // ==========================================
+    // ALLOCATION
+    // ==========================================
+
+    const assignedAllocations = allocations.filter(
+      (allocation) => allocation.status === UserSprintStatus.ASSIGNED,
+    );
+
+    const pendingAllocations = allocations.filter(
+      (allocation) =>
+        allocation.status === UserSprintStatus.REQUESTED ||
+        allocation.status === UserSprintStatus.PENDING_APPROVAL,
+    );
+
+    // ==========================================
+    // TASK OWNER
+    // ==========================================
+
+    const unassignedTasks = tasks.filter((task) => !task.userId);
+
+    // ==========================================
+    // DEPENDENCY
+    // ==========================================
+
+    const dependencyStatuses = await Promise.all(
+      tasks.map(async (task) => {
+        try {
+          return await this.taskDependenciesService.getDependencyStatus(
+            task.id,
+          );
+        } catch {
+          return {
+            taskId: task.id,
+
+            totalDependencies: 0,
+
+            unfinishedDependencies: 0,
+
+            isBlockedByDependency: false,
+          };
+        }
+      }),
+    );
+
+    const dependencyBlockedTasks = dependencyStatuses.filter(
+      (status) => status.isBlockedByDependency,
+    );
+
+    // ==========================================
+    // HARD BLOCKERS
+    // ==========================================
+
+    const blockers: string[] = [];
+
+    const startDate = dayjs(sprint.startDate);
+
+    if (dayjs().isBefore(startDate, 'day')) {
+      blockers.push(
+        `Chưa đến ngày bắt đầu Sprint (${startDate.format('DD/MM/YYYY')}).`,
+      );
+    }
+
+    if (tasks.length === 0) {
+      blockers.push('Sprint chưa có Task.');
+    }
+
+    if (assignedAllocations.length === 0) {
+      blockers.push('Sprint chưa có nhân sự ASSIGNED.');
+    }
+
+    // ==========================================
+    // WARNINGS
+    // ==========================================
+
+    const warnings: string[] = [];
+
+    if (unassignedTasks.length > 0) {
+      warnings.push(`${unassignedTasks.length} Task chưa có owner.`);
+    }
+
+    if (pendingAllocations.length > 0) {
+      warnings.push(`${pendingAllocations.length} allocation đang chờ xử lý.`);
+    }
+
+    if (dependencyBlockedTasks.length > 0) {
+      warnings.push(
+        `${dependencyBlockedTasks.length} Task đang chờ dependency.`,
+      );
+    }
+
+    // ==========================================
+    // RESULT
+    // ==========================================
+
+    return {
+      sprintId: sprint.id,
+
+      sprintName: sprint.name,
+
+      sprintStatus: sprint.status,
+
+      canStart: blockers.length === 0,
+
+      blockers,
+
+      warnings,
+
+      summary: {
+        totalTasks: tasks.length,
+
+        assignedTasks: tasks.length - unassignedTasks.length,
+
+        unassignedTasks: unassignedTasks.length,
+
+        assignedResources: assignedAllocations.length,
+
+        pendingAllocations: pendingAllocations.length,
+
+        dependencyBlockedTasks: dependencyBlockedTasks.length,
+      },
+    };
+  }
+
+  private async assertSprintCanStart(sprint: Sprint) {
+    const readiness = await this.getStartReadiness(sprint.id);
+
+    if (!readiness.canStart) {
+      throw new ConflictException({
+        code: 'SPRINT_NOT_READY',
+
+        message: 'Sprint chưa đủ điều kiện để bắt đầu.',
+
+        blockers: readiness.blockers,
+
+        warnings: readiness.warnings,
+
+        summary: readiness.summary,
+      });
+    }
+
+    return readiness;
+  }
+
+  async getCompletionReadiness(sprintId: string) {
+    const sprint = await this.findOne(sprintId);
+
+    const tasks = await this.taskRepo.find({
+      where: {
+        sprintId: sprint.id,
+
+        isDeleted: false,
+      },
+
+      order: {
+        createdAt: 'ASC',
+      },
+    });
+    const archivedTasks = await this.taskRepo.find({
+      where: {
+        sprintId: sprint.id,
+
+        isDeleted: true,
+      },
+
+      // QUAN TRỌNG:
+      // Task carry-over đã được archive / soft-delete.
+      // TypeORM mặc định ẩn các row có deletedAt.
+      withDeleted: true,
+    });
+
+    const carriedOverTasks = archivedTasks.filter((task) => {
+      const meta = task.carryOverMeta;
+
+      if (!meta) {
+        return false;
+      }
+
+      // NEW FORMAT
+      if (meta.targetTaskId) {
+        return true;
+      }
+
+      // LEGACY FORMAT
+      return meta.direction === 'SOURCE';
+    });
+    const allocations = await this.userSprintRepo.find({
+      where: {
+        sprintId: sprint.id,
+      },
+    });
+
+    const blockers: string[] = [];
+
+    // ==========================================
+    // 1. TASK CHECK
+    // ==========================================
+
+    if (tasks.length === 0 && carriedOverTasks.length === 0) {
+      blockers.push('Sprint chưa có Task.');
+    }
+
+    const unfinishedTasks = tasks.filter((task) => {
+      const status = (task.status ?? '').toString().toUpperCase();
+
+      const progress = Number(task.progress ?? 0);
+
+      return status !== TaskStatus.DONE || progress < 100;
+    });
+    const completedTasks = tasks.filter((task) => {
+      const status = (task.status ?? '').toString().toUpperCase();
+
+      const progress = Number(task.progress ?? 0);
+
+      return status === TaskStatus.DONE && progress >= 100;
+    });
+
+    // ==========================================
+    // SPRINT SCOPE SUMMARY
+    // ==========================================
+    //
+    // Scope thực tế của Sprint:
+    //
+    // - Completed:
+    //   Task hoàn thành trong Sprint.
+    //
+    // - Carried-over:
+    //   Task chưa hoàn thành nhưng đã được
+    //   chuyển sang Sprint tiếp theo.
+    //
+    // - Remaining:
+    //   Task vẫn còn active trong Sprint
+    //   nhưng chưa DONE.
+    //
+    // Không tính các Task archive thủ công
+    // không phải Carry-over.
+    // ==========================================
+
+    const plannedScopeTasks =
+      completedTasks.length + carriedOverTasks.length + unfinishedTasks.length;
+
+    const deliveredTasks = completedTasks.length;
+
+    const carriedScopeTasks = carriedOverTasks.length;
+
+    const remainingScopeTasks = unfinishedTasks.length;
+
+    const deliveryRate =
+      plannedScopeTasks > 0
+        ? Math.round((deliveredTasks / plannedScopeTasks) * 100)
+        : 0;
+
+    const carryOverRate =
+      plannedScopeTasks > 0
+        ? Math.round((carriedScopeTasks / plannedScopeTasks) * 100)
+        : 0;
+    if (unfinishedTasks.length > 0) {
+      blockers.push(`${unfinishedTasks.length} Task chưa hoàn thành.`);
+    }
+    const warnings: string[] = [];
+
+    if (carryOverRate >= 30) {
+      warnings.push(
+        `Carry-over Rate đang ở mức ${carryOverRate}%. Sprint có dấu hiệu scope spill cao.`,
+      );
+    }
+
+    // ==========================================
+    // 2. DEPENDENCY CHECK
+    // ==========================================
+
+    const dependencyStatuses = await Promise.all(
+      tasks.map(async (task) => {
+        try {
+          const status = await this.taskDependenciesService.getDependencyStatus(
+            task.id,
+          );
+
+          return {
+            task,
+            status,
+          };
+        } catch {
+          return {
+            task,
+
+            status: {
+              taskId: task.id,
+
+              totalDependencies: 0,
+
+              unfinishedDependencies: 0,
+
+              isBlockedByDependency: false,
+            },
+          };
+        }
+      }),
+    );
+
+    const dependencyBlockedTasks = dependencyStatuses.filter(
+      (item) => item.status.isBlockedByDependency,
+    );
+
+    if (dependencyBlockedTasks.length > 0) {
+      blockers.push(
+        `${dependencyBlockedTasks.length} Task còn dependency chưa hoàn thành.`,
+      );
+    }
+
+    // ==========================================
+    // 3. ALLOCATION CHECK
+    // ==========================================
+
+    const unresolvedAllocations = allocations.filter(
+      (allocation) =>
+        allocation.status !== UserSprintStatus.RELEASED &&
+        allocation.status !== UserSprintStatus.DECLINED,
+    );
+
+    if (unresolvedAllocations.length > 0) {
+      blockers.push(
+        `${unresolvedAllocations.length} allocation chưa được RELEASED.`,
+      );
+    }
+
+    // ==========================================
+    // RESULT
+    // ==========================================
+
+    return {
+      sprintId: sprint.id,
+
+      sprintName: sprint.name,
+
+      sprintStatus: sprint.status,
+
+      canComplete: blockers.length === 0,
+
+      blockers,
+      warnings,
+
+      summary: {
+        totalTasks: tasks.length,
+
+        completedTasks: completedTasks.length,
+
+        unfinishedTasks: unfinishedTasks.length,
+
+        carriedOverTasks: carriedOverTasks.length,
+
+        // ========================================
+        // SCOPE
+        // ========================================
+
+        plannedScopeTasks,
+
+        deliveredTasks,
+
+        carriedScopeTasks,
+
+        remainingScopeTasks,
+
+        deliveryRate,
+
+        carryOverRate,
+
+        dependencyBlockedTasks: dependencyBlockedTasks.length,
+
+        totalAllocations: allocations.length,
+
+        releasedAllocations: allocations.filter(
+          (allocation) => allocation.status === UserSprintStatus.RELEASED,
+        ).length,
+
+        unresolvedAllocations: unresolvedAllocations.length,
+      },
+
+      details: {
+        unfinishedTasks: unfinishedTasks.map((task) => ({
+          id: task.id,
+
+          title: task.title ?? 'Task chưa đặt tên',
+
+          status: task.status,
+
+          progress: Number(task.progress ?? 0),
+
+          userId: task.userId ?? null,
+        })),
+
+        dependencyBlockedTasks: dependencyBlockedTasks.map((item) => ({
+          id: item.task.id,
+
+          title: item.task.title ?? 'Task chưa đặt tên',
+
+          unfinishedDependencies: item.status.unfinishedDependencies,
+        })),
+
+        unresolvedAllocations: unresolvedAllocations.map((allocation) => ({
+          id: allocation.id,
+
+          userId: allocation.userId,
+
+          status: allocation.status,
+
+          percitant: Number(allocation.percitant ?? 0),
+        })),
+        carriedOverTasks: carriedOverTasks.map((task) => ({
+          id: task.id,
+
+          title: task.title ?? 'Task chưa đặt tên',
+
+          status: task.status,
+
+          progress: Number(task.progress ?? 0),
+
+          targetTaskId:
+            task.carryOverMeta?.targetTaskId ??
+            (task.carryOverMeta?.direction === 'SOURCE'
+              ? (task.carryOverMeta?.linkedTaskId ?? null)
+              : null),
+
+          targetSprintId:
+            task.carryOverMeta?.targetSprintId ??
+            (task.carryOverMeta?.direction === 'SOURCE'
+              ? (task.carryOverMeta?.linkedSprintId ?? null)
+              : null),
+
+          carriedAt:
+            task.carryOverMeta?.carriedOutAt ??
+            task.carryOverMeta?.carriedAt ??
+            null,
+        })),
+      },
+    };
+  }
+
+  async getSprintRetrospective(sprintId: string) {
+    const sprint = await this.findOne(sprintId);
+
+    // ==========================================
+    // TASK DATA
+    // ==========================================
+
+    const activeTasks = await this.taskRepo.find({
+      where: {
+        sprintId: sprint.id,
+
+        isDeleted: false,
+      },
+
+      order: {
+        createdAt: 'ASC',
+      },
+    });
+
+    const archivedTasks = await this.taskRepo.find({
+      where: {
+        sprintId: sprint.id,
+
+        isDeleted: true,
+      },
+
+      // Task Carry-over/archive có deletedAt.
+      // TypeORM mặc định sẽ ẩn nếu không bật.
+      withDeleted: true,
+
+      order: {
+        createdAt: 'ASC',
+      },
+    });
+
+    // ==========================================
+    // CARRY-OVER
+    // ==========================================
+
+    const carriedOverTasks = archivedTasks.filter((task) => {
+      const meta = task.carryOverMeta;
+
+      if (!meta) {
+        return false;
+      }
+
+      // New metadata format.
+      if (meta.targetTaskId) {
+        return true;
+      }
+
+      // Legacy format.
+      return meta.direction === 'SOURCE';
+    });
+
+    // ==========================================
+    // REMOVED SCOPE
+    //
+    // Task archive thủ công, không phải carry.
+    // ==========================================
+
+    const removedTasks = archivedTasks.filter(
+      (task) =>
+        !carriedOverTasks.some((carriedTask) => carriedTask.id === task.id),
+    );
+
+    // ==========================================
+    // COMPLETED / REMAINING
+    // ==========================================
+
+    const completedTasks = activeTasks.filter((task) => {
+      const status = (task.status ?? '').toString().toUpperCase();
+
+      const progress = Number(task.progress ?? 0);
+
+      return status === TaskStatus.DONE && progress >= 100;
+    });
+
+    const remainingTasks = activeTasks.filter(
+      (task) =>
+        !completedTasks.some((completedTask) => completedTask.id === task.id),
+    );
+
+    // ==========================================
+    // SCOPE
+    // ==========================================
+
+    const plannedScope =
+      completedTasks.length +
+      remainingTasks.length +
+      carriedOverTasks.length +
+      removedTasks.length;
+
+    const deliveredScope = completedTasks.length;
+
+    const carryOverScope = carriedOverTasks.length;
+
+    const removedScope = removedTasks.length;
+
+    const remainingScope = remainingTasks.length;
+
+    const deliveryRate =
+      plannedScope > 0 ? Math.round((deliveredScope / plannedScope) * 100) : 0;
+
+    const carryOverRate =
+      plannedScope > 0 ? Math.round((carryOverScope / plannedScope) * 100) : 0;
+
+    const removedScopeRate =
+      plannedScope > 0 ? Math.round((removedScope / plannedScope) * 100) : 0;
+
+    // ==========================================
+    // RESOURCE
+    // ==========================================
+
+    const allocations = await this.userSprintRepo.find({
+      where: {
+        sprintId: sprint.id,
+      },
+
+      relations: {
+        user: true,
+      },
+    });
+
+    // ==========================================
+    // ACTUAL PARTICIPATION
+    //
+    // Chỉ ASSIGNED / RELEASED mới được xem là
+    // resource thực sự tham gia Sprint.
+    //
+    // REQUESTED / PENDING_APPROVAL / DECLINED
+    // không được đưa vào retrospective workload.
+    // ==========================================
+
+    const participatingAllocations = allocations.filter(
+      (allocation) =>
+        allocation.status === UserSprintStatus.ASSIGNED ||
+        allocation.status === UserSprintStatus.RELEASED,
+    );
+
+    const releasedAllocations = participatingAllocations.filter(
+      (allocation) => allocation.status === UserSprintStatus.RELEASED,
+    );
+
+    const participantUserIds = new Set(
+      participatingAllocations.map((allocation) => allocation.userId),
+    );
+
+    const totalAllocationPercent = participatingAllocations.reduce(
+      (total, allocation) => total + Number(allocation.percitant ?? 0),
+      0,
+    );
+
+    const totalAllocatedFte = Number((totalAllocationPercent / 100).toFixed(2));
+
+    // ==========================================
+    // PERFORMANCE REVIEW
+    // ==========================================
+
+    const reviewedAllocations = releasedAllocations.filter(
+      (allocation) =>
+        allocation.hardSkillRate !== null &&
+        allocation.hardSkillRate !== undefined &&
+        allocation.softSkillRate !== null &&
+        allocation.softSkillRate !== undefined,
+    );
+
+    const averageHardSkill =
+      reviewedAllocations.length > 0
+        ? Number(
+            (
+              reviewedAllocations.reduce(
+                (total, allocation) =>
+                  total + Number(allocation.hardSkillRate ?? 0),
+                0,
+              ) / reviewedAllocations.length
+            ).toFixed(2),
+          )
+        : null;
+
+    const averageSoftSkill =
+      reviewedAllocations.length > 0
+        ? Number(
+            (
+              reviewedAllocations.reduce(
+                (total, allocation) =>
+                  total + Number(allocation.softSkillRate ?? 0),
+                0,
+              ) / reviewedAllocations.length
+            ).toFixed(2),
+          )
+        : null;
+
+    // ==========================================
+    // RETROSPECTIVE FLAGS
+    // ==========================================
+
+    const observations: string[] = [];
+
+    if (carryOverRate >= 30) {
+      observations.push(
+        `Carry-over Rate ${carryOverRate}% cho thấy Sprint có mức scope spill cao.`,
+      );
+    }
+
+    if (removedScopeRate >= 20) {
+      observations.push(
+        `${removedScopeRate}% scope đã bị loại khỏi Sprint trong quá trình thực hiện.`,
+      );
+    }
+
+    if (deliveryRate >= 90) {
+      observations.push('Sprint đạt Delivery Rate rất tốt.');
+    }
+
+    if (deliveryRate < 60 && plannedScope > 0) {
+      observations.push(
+        'Delivery Rate dưới 60%. Cần xem lại planning và capacity.',
+      );
+    }
+
+    if (reviewedAllocations.length < releasedAllocations.length) {
+      observations.push(
+        'Một số resource đã Release nhưng chưa có đầy đủ performance review.',
+      );
+    }
+
+    // ==========================================
+    // RESULT
+    // ==========================================
+
+    return {
+      sprint: {
+        id: sprint.id,
+
+        name: sprint.name,
+
+        status: sprint.status,
+
+        startDate: sprint.startDate,
+
+        endDate: sprint.endDate,
+
+        projectId: sprint.projectId,
+      },
+
+      scope: {
+        planned: plannedScope,
+
+        delivered: deliveredScope,
+
+        carriedOver: carryOverScope,
+
+        removed: removedScope,
+
+        remaining: remainingScope,
+
+        deliveryRate,
+
+        carryOverRate,
+
+        removedScopeRate,
+      },
+
+      resources: {
+        totalParticipants: participantUserIds.size,
+
+        totalAllocations: allocations.length,
+
+        releasedAllocations: releasedAllocations.length,
+
+        totalAllocationPercent,
+
+        totalAllocatedFte,
+
+        reviewedResources: reviewedAllocations.length,
+
+        averageHardSkill,
+
+        averageSoftSkill,
+      },
+
+      observations,
+
+      details: {
+        completedTasks: completedTasks.map((task) => ({
+          id: task.id,
+
+          title: task.title,
+
+          progress: Number(task.progress ?? 0),
+        })),
+
+        carriedOverTasks: carriedOverTasks.map((task) => ({
+          id: task.id,
+
+          title: task.title,
+
+          progress: Number(task.progress ?? 0),
+
+          targetTaskId:
+            task.carryOverMeta?.targetTaskId ??
+            task.carryOverMeta?.linkedTaskId ??
+            null,
+
+          targetSprintId:
+            task.carryOverMeta?.targetSprintId ??
+            task.carryOverMeta?.linkedSprintId ??
+            null,
+        })),
+
+        removedTasks: removedTasks.map((task) => ({
+          id: task.id,
+
+          title: task.title,
+        })),
+
+        remainingTasks: remainingTasks.map((task) => ({
+          id: task.id,
+
+          title: task.title,
+
+          status: task.status,
+
+          progress: Number(task.progress ?? 0),
+        })),
+      },
+    };
+  }
+  async getProjectSprintTrends(projectId: string, limit = 5) {
+    // ==========================================
+    // PROJECT
+    // ==========================================
+
+    const project = await this.getProjectOrFail(projectId);
+
+    const safeLimit = Math.min(Math.max(Number(limit) || 5, 2), 10);
+
+    // ==========================================
+    // COMPLETED SPRINTS
+    // ==========================================
+
+    const completedSprints = await this.sprintRepo.find({
+      where: {
+        projectId: project.id,
+
+        status: 'completed',
+
+        isDeleted: false,
+      },
+
+      order: {
+        endDate: 'DESC',
+      },
+
+      take: safeLimit,
+    });
+
+    // API trả theo timeline cũ → mới
+    // để frontend đọc trend tự nhiên hơn.
+    completedSprints.reverse();
+
+    // ==========================================
+    // RETROSPECTIVE EACH SPRINT
+    // ==========================================
+
+    const sprintMetrics = await Promise.all(
+      completedSprints.map(async (sprint) => {
+        const retrospective = await this.getSprintRetrospective(sprint.id);
+
+        return {
+          sprintId: sprint.id,
+
+          sprintName: sprint.name,
+
+          startDate: sprint.startDate,
+
+          endDate: sprint.endDate,
+
+          scope: {
+            planned: retrospective.scope.planned,
+
+            delivered: retrospective.scope.delivered,
+
+            carriedOver: retrospective.scope.carriedOver,
+
+            removed: retrospective.scope.removed,
+
+            deliveryRate: retrospective.scope.deliveryRate,
+
+            carryOverRate: retrospective.scope.carryOverRate,
+
+            removedScopeRate: retrospective.scope.removedScopeRate,
+          },
+
+          resources: {
+            totalParticipants: retrospective.resources.totalParticipants,
+
+            totalAllocatedFte: retrospective.resources.totalAllocatedFte,
+
+            averageHardSkill: retrospective.resources.averageHardSkill,
+
+            averageSoftSkill: retrospective.resources.averageSoftSkill,
+          },
+        };
+      }),
+    );
+
+    // ==========================================
+    // EMPTY / NOT ENOUGH HISTORY
+    // ==========================================
+
+    if (sprintMetrics.length === 0) {
+      return {
+        project: {
+          id: project.id,
+
+          name: project.name,
+        },
+
+        totalSprints: 0,
+
+        metrics: [] as typeof sprintMetrics,
+
+        summary: {
+          averageDeliveryRate: 0,
+
+          averageCarryOverRate: 0,
+
+          averageRemovedScopeRate: 0,
+
+          averageAllocatedFte: 0,
+
+          deliveryTrend: 'NO_DATA',
+
+          carryOverTrend: 'NO_DATA',
+
+          overallTrend: 'NO_DATA',
+        },
+      };
+    }
+
+    // ==========================================
+    // AVERAGES
+    // ==========================================
+
+    const average = (values: number[]) => {
+      if (values.length === 0) {
+        return 0;
+      }
+
+      return Number(
+        (
+          values.reduce((total, value) => total + Number(value ?? 0), 0) /
+          values.length
+        ).toFixed(2),
+      );
+    };
+
+    const averageDeliveryRate = average(
+      sprintMetrics.map((item) => item.scope.deliveryRate),
+    );
+
+    const averageCarryOverRate = average(
+      sprintMetrics.map((item) => item.scope.carryOverRate),
+    );
+
+    const averageRemovedScopeRate = average(
+      sprintMetrics.map((item) => item.scope.removedScopeRate),
+    );
+
+    const averageAllocatedFte = average(
+      sprintMetrics.map((item) => item.resources.totalAllocatedFte),
+    );
+
+    // ==========================================
+    // TREND ENGINE
+    // ==========================================
+
+    type Trend = 'IMPROVING' | 'STABLE' | 'DECLINING' | 'NO_DATA';
+
+    const calculateTrend = (
+      first: number | null,
+      last: number | null,
+      higherIsBetter: boolean,
+      stableThreshold = 5,
+    ): Trend => {
+      if (first === null || last === null) {
+        return 'NO_DATA';
+      }
+
+      const delta = last - first;
+
+      if (Math.abs(delta) <= stableThreshold) {
+        return 'STABLE';
+      }
+
+      if (higherIsBetter) {
+        return delta > 0 ? 'IMPROVING' : 'DECLINING';
+      }
+
+      return delta < 0 ? 'IMPROVING' : 'DECLINING';
+    };
+
+    const first = sprintMetrics[0];
+
+    const last = sprintMetrics[sprintMetrics.length - 1];
+
+    const deliveryTrend =
+      sprintMetrics.length >= 2
+        ? calculateTrend(
+            first.scope.deliveryRate,
+
+            last.scope.deliveryRate,
+
+            true,
+          )
+        : 'NO_DATA';
+
+    const carryOverTrend =
+      sprintMetrics.length >= 2
+        ? calculateTrend(
+            first.scope.carryOverRate,
+
+            last.scope.carryOverRate,
+
+            false,
+          )
+        : 'NO_DATA';
+
+    // ==========================================
+    // OVERALL TREND
+    // ==========================================
+
+    let overallTrend: Trend = 'NO_DATA';
+
+    if (sprintMetrics.length >= 2) {
+      const trends = [deliveryTrend, carryOverTrend];
+
+      const improving = trends.filter((trend) => trend === 'IMPROVING').length;
+
+      const declining = trends.filter((trend) => trend === 'DECLINING').length;
+
+      if (improving > declining) {
+        overallTrend = 'IMPROVING';
+      } else if (declining > improving) {
+        overallTrend = 'DECLINING';
+      } else {
+        overallTrend = 'STABLE';
+      }
+    }
+
+    // ==========================================
+    // RESULT
+    // ==========================================
+
+    return {
+      project: {
+        id: project.id,
+
+        name: project.name,
+      },
+
+      totalSprints: sprintMetrics.length,
+
+      metrics: sprintMetrics,
+
+      summary: {
+        averageDeliveryRate,
+
+        averageCarryOverRate,
+
+        averageRemovedScopeRate,
+
+        averageAllocatedFte,
+
+        deliveryTrend,
+
+        carryOverTrend,
+
+        overallTrend,
+      },
+    };
+  }
+
+  async getSprintPlanningForecast(sprintId: string) {
+    // ==========================================
+    // SPRINT
+    // ==========================================
+
+    const sprint = await this.findOne(sprintId);
+
+    const sprintStatus = this.normalizeStatus(sprint.status);
+
+    if (sprintStatus !== 'UPCOMING') {
+      throw new ConflictException({
+        code: 'SPRINT_FORECAST_NOT_UPCOMING',
+
+        message: 'Planning Forecast chỉ áp dụng cho Sprint UPCOMING.',
+
+        sprintStatus: sprint.status,
+      });
+    }
+
+    // ==========================================
+    // TASKS
+    // ==========================================
+
+    const tasks = await this.taskRepo.find({
+      where: {
+        sprintId: sprint.id,
+
+        isDeleted: false,
+      },
+
+      order: {
+        createdAt: 'ASC',
+      },
+    });
+
+    const plannedTasks = tasks.length;
+
+    const unassignedTasks = tasks.filter((task) => !task.userId);
+
+    // ==========================================
+    // ALLOCATIONS
+    // ==========================================
+
+    const allocations = await this.userSprintRepo.find({
+      where: {
+        sprintId: sprint.id,
+      },
+    });
+
+    const assignedAllocations = allocations.filter(
+      (allocation) => allocation.status === UserSprintStatus.ASSIGNED,
+    );
+
+    const pendingAllocations = allocations.filter(
+      (allocation) =>
+        allocation.status === UserSprintStatus.REQUESTED ||
+        allocation.status === UserSprintStatus.PENDING_APPROVAL,
+    );
+
+    // ==========================================
+    // COMMITTED CAPACITY
+    // ==========================================
+
+    const committedPercent = assignedAllocations.reduce(
+      (total, allocation) => total + Number(allocation.percitant ?? 0),
+      0,
+    );
+
+    const reservedPercent = pendingAllocations.reduce(
+      (total, allocation) => total + Number(allocation.percitant ?? 0),
+      0,
+    );
+
+    const committedFte = Number((committedPercent / 100).toFixed(2));
+
+    const reservedFte = Number((reservedPercent / 100).toFixed(2));
+
+    // ==========================================
+    // DEPENDENCY
+    // ==========================================
+
+    const dependencyStatuses = await Promise.all(
+      tasks.map(async (task) => {
+        try {
+          return await this.taskDependenciesService.getDependencyStatus(
+            task.id,
+          );
+        } catch {
+          return {
+            taskId: task.id,
+
+            totalDependencies: 0,
+
+            unfinishedDependencies: 0,
+
+            isBlockedByDependency: false,
+          };
+        }
+      }),
+    );
+
+    const dependencyBlockedTasks = dependencyStatuses.filter(
+      (status) => status.isBlockedByDependency,
+    );
+
+    // ==========================================
+    // HISTORICAL PERFORMANCE
+    // ==========================================
+
+    const trends = await this.getProjectSprintTrends(sprint.projectId, 5);
+
+    const historicalMetrics = trends.metrics ?? [];
+
+    const sufficientHistory = historicalMetrics.length >= 2;
+
+    const historicalDeliveredTasks = historicalMetrics.reduce(
+      (total, item) => total + Number(item.scope.delivered ?? 0),
+      0,
+    );
+
+    const historicalAllocatedFte = historicalMetrics.reduce(
+      (total, item) => total + Number(item.resources.totalAllocatedFte ?? 0),
+      0,
+    );
+
+    // ==========================================
+    // HISTORICAL THROUGHPUT
+    //
+    // Task / FTE
+    // ==========================================
+
+    const historicalThroughputPerFte =
+      sufficientHistory && historicalAllocatedFte > 0
+        ? Number((historicalDeliveredTasks / historicalAllocatedFte).toFixed(2))
+        : null;
+
+    // ==========================================
+    // FORECAST
+    // ==========================================
+
+    const expectedDeliverableTasks =
+      historicalThroughputPerFte !== null
+        ? Number((committedFte * historicalThroughputPerFte).toFixed(2))
+        : null;
+
+    const forecastCoverage =
+      expectedDeliverableTasks !== null && plannedTasks > 0
+        ? Math.min(
+            100,
+            Math.round((expectedDeliverableTasks / plannedTasks) * 100),
+          )
+        : null;
+
+    // ==========================================
+    // REQUIRED CAPACITY
+    // ==========================================
+
+    const requiredFte =
+      historicalThroughputPerFte !== null && historicalThroughputPerFte > 0
+        ? Number((plannedTasks / historicalThroughputPerFte).toFixed(2))
+        : null;
+
+    const additionalFteNeeded =
+      requiredFte !== null
+        ? Number(Math.max(0, requiredFte - committedFte).toFixed(2))
+        : null;
+
+    const forecastTaskGap =
+      expectedDeliverableTasks !== null
+        ? Math.max(0, Math.ceil(plannedTasks - expectedDeliverableTasks))
+        : null;
+
+    // ==========================================
+    // HEALTH
+    // ==========================================
+
+    type PlanningHealth = 'READY' | 'ATTENTION' | 'HIGH_RISK';
+
+    let planningHealth: PlanningHealth = 'READY';
+
+    if (
+      plannedTasks === 0 ||
+      (plannedTasks > 0 && committedFte === 0) ||
+      (sufficientHistory && forecastCoverage !== null && forecastCoverage < 70)
+    ) {
+      planningHealth = 'HIGH_RISK';
+    } else if (
+      !sufficientHistory ||
+      unassignedTasks.length > 0 ||
+      pendingAllocations.length > 0 ||
+      dependencyBlockedTasks.length > 0 ||
+      (forecastCoverage !== null && forecastCoverage < 100)
+    ) {
+      planningHealth = 'ATTENTION';
+    }
+
+    // ==========================================
+    // WARNINGS
+    // ==========================================
+
+    const warnings: string[] = [];
+
+    if (plannedTasks === 0) {
+      warnings.push('Sprint chưa có Task để forecast.');
+    }
+
+    if (plannedTasks > 0 && committedFte === 0) {
+      warnings.push('Sprint chưa có capacity ASSIGNED.');
+    }
+
+    if (unassignedTasks.length > 0) {
+      warnings.push(`${unassignedTasks.length} Task chưa có owner.`);
+    }
+
+    if (pendingAllocations.length > 0) {
+      warnings.push(
+        `${pendingAllocations.length} allocation vẫn đang REQUESTED/PENDING.`,
+      );
+    }
+
+    if (dependencyBlockedTasks.length > 0) {
+      warnings.push(
+        `${dependencyBlockedTasks.length} Task đang bị dependency block.`,
+      );
+    }
+
+    if (!sufficientHistory) {
+      warnings.push(
+        'Chưa đủ tối thiểu 2 Sprint COMPLETED để dự báo theo lịch sử.',
+      );
+    }
+
+    if (forecastTaskGap !== null && forecastTaskGap > 0) {
+      warnings.push(
+        `Theo historical throughput, Sprint có nguy cơ thiếu capacity cho khoảng ${forecastTaskGap} Task.`,
+      );
+    }
+
+    // ==========================================
+    // RECOMMENDATIONS
+    // ==========================================
+
+    const recommendations: string[] = [];
+
+    if (additionalFteNeeded !== null && additionalFteNeeded > 0) {
+      recommendations.push(
+        `Cân nhắc bổ sung khoảng ${additionalFteNeeded} FTE hoặc giảm scope trước khi Start Sprint.`,
+      );
+    }
+
+    if (unassignedTasks.length > 0) {
+      recommendations.push(
+        'Hoàn thiện Task ownership trước khi Sprint bắt đầu.',
+      );
+    }
+
+    if (pendingAllocations.length > 0) {
+      recommendations.push(
+        'Hoàn tất allocation approval để capacity forecast phản ánh committed capacity.',
+      );
+    }
+
+    if (dependencyBlockedTasks.length > 0) {
+      recommendations.push('Xử lý dependency plan trước khi Start Sprint.');
+    }
+
+    // ==========================================
+    // RESULT
+    // ==========================================
+
+    return {
+      sprint: {
+        id: sprint.id,
+
+        name: sprint.name,
+
+        status: sprint.status,
+
+        startDate: sprint.startDate,
+
+        endDate: sprint.endDate,
+
+        projectId: sprint.projectId,
+      },
+
+      planningHealth,
+
+      scope: {
+        plannedTasks,
+
+        assignedTasks: plannedTasks - unassignedTasks.length,
+
+        unassignedTasks: unassignedTasks.length,
+
+        dependencyBlockedTasks: dependencyBlockedTasks.length,
+      },
+
+      capacity: {
+        assignedResources: assignedAllocations.length,
+
+        pendingAllocations: pendingAllocations.length,
+
+        committedPercent,
+
+        reservedPercent,
+
+        committedFte,
+
+        reservedFte,
+      },
+
+      history: {
+        completedSprints: historicalMetrics.length,
+
+        sufficientHistory,
+
+        historicalDeliveredTasks,
+
+        historicalAllocatedFte: Number(historicalAllocatedFte.toFixed(2)),
+
+        throughputPerFte: historicalThroughputPerFte,
+
+        averageDeliveryRate: trends.summary?.averageDeliveryRate ?? null,
+
+        averageCarryOverRate: trends.summary?.averageCarryOverRate ?? null,
+      },
+
+      forecast: {
+        expectedDeliverableTasks,
+
+        forecastCoverage,
+
+        forecastTaskGap,
+
+        requiredFte,
+
+        additionalFteNeeded,
+      },
+
+      warnings,
+
+      recommendations,
+    };
+  }
+
+  // ==========================================
+  // COMPLETION GUARD
+  // ==========================================
+
+  private async assertSprintCanComplete(sprint: Sprint) {
+    const readiness = await this.getCompletionReadiness(sprint.id);
+
+    if (!readiness.canComplete) {
+      throw new ConflictException({
+        code: 'SPRINT_NOT_READY_TO_COMPLETE',
+
+        message: 'Sprint chưa đủ điều kiện để hoàn thành.',
+
+        blockers: readiness.blockers,
+
+        summary: readiness.summary,
+
+        details: readiness.details,
+      });
+    }
+
+    return readiness;
+  }
+
+  // ==========================================
+  // CANCEL PREPARATION
+  // ==========================================
+
+  private async prepareSprintCancellation(sprint: Sprint) {
+    const allocations = await this.userSprintRepo.find({
+      where: {
+        sprintId: sprint.id,
+      },
+    });
+
+    // ========================================
+    // ASSIGNED RESOURCE
+    // ========================================
+    //
+    // Không tự RELEASE ở đây vì Release
+    // còn gắn với performance review.
+    //
+    // PM phải Release nhân sự trước.
+    // ========================================
+
+    const assignedAllocations = allocations.filter(
+      (allocation) => allocation.status === UserSprintStatus.ASSIGNED,
+    );
+
+    if (assignedAllocations.length > 0) {
+      throw new ConflictException({
+        code: 'SPRINT_HAS_ASSIGNED_RESOURCES',
+
+        message:
+          'Sprint còn nhân sự ASSIGNED. Hãy Release nhân sự trước khi hủy Sprint.',
+
+        allocations: assignedAllocations.map((allocation) => ({
+          id: allocation.id,
+
+          userId: allocation.userId,
+
+          percitant: Number(allocation.percitant ?? 0),
+        })),
+      });
+    }
+
+    // ========================================
+    // CLEAN REQUESTED / PENDING
+    // ========================================
+    //
+    // user_sprint hiện chưa có CANCELLED status.
+    //
+    // Nếu giữ REQUESTED/PENDING sau khi Sprint
+    // CANCELLED thì Capacity Engine vẫn có thể
+    // tính các request này.
+    //
+    // Vì vậy khi hủy Sprint:
+    // REQUESTED + PENDING_APPROVAL được cleanup.
+    // RELEASED vẫn giữ để làm lịch sử.
+    // ========================================
+
+    await this.userSprintRepo.delete({
+      sprintId: sprint.id,
+
+      status: In([
+        UserSprintStatus.REQUESTED,
+        UserSprintStatus.PENDING_APPROVAL,
+      ]) as any,
+    });
+  }
+
+  // ==========================================
+  // REMOVE / SOFT DELETE
+  // ==========================================
+
+  async remove(id: string) {
+    const sprint = await this.findOne(id);
+
+    const status = this.normalizeStatus(sprint.status);
+
+    if (status === 'COMPLETED') {
+      throw new ConflictException({
+        code: 'COMPLETED_SPRINT_CANNOT_DELETE',
+
+        message: 'Sprint đã hoàn thành không thể bị xóa.',
+      });
+    }
+
+    if (status === 'ACTIVE') {
+      throw new ConflictException({
+        code: 'ACTIVE_SPRINT_CANNOT_DELETE',
+
+        message:
+          'Sprint đang ACTIVE không thể bị xóa trực tiếp. Hãy hủy Sprint trước.',
+      });
+    }
+
+    sprint.isDeleted = true;
+
+    sprint.deletedAt = new Date();
+
+    await this.sprintRepo.save(sprint);
+    await this.pmRealtimeService.publishProjectChanged({
+      projectId: sprint.projectId,
+
+      sprintId: sprint.id,
+
+      entity: 'SPRINT',
+
+      action: 'DELETED',
+
+      entityId: sprint.id,
+    });
+    return {
+      success: true,
+
+      id: sprint.id,
+
+      message: 'Đã xóa Sprint.',
+    };
+  }
+
+  // ==========================================
+  // GET PROJECT
+  // ==========================================
+
+  private async getProjectOrFail(projectId: string) {
+    const project = await this.projectRepo.findOne({
+      where: {
+        id: projectId,
+        isDeleted: false,
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException({
+        code: 'PROJECT_NOT_FOUND',
+
+        message: 'Không tìm thấy Project của Sprint.',
+      });
+    }
+
+    return project;
+  }
+
+  // ==========================================
+  // SPRINT DATE VALIDATION
+  // ==========================================
+
+  private validateSprintDates(
+    startDate: string | Date,
+
+    endDate: string | Date,
+  ) {
+    const start = dayjs(startDate);
+
+    const end = dayjs(endDate);
+
+    if (!start.isValid() || !end.isValid()) {
+      throw new BadRequestException({
+        code: 'INVALID_SPRINT_DATE',
+
+        message: 'Ngày bắt đầu hoặc ngày kết thúc Sprint không hợp lệ.',
+      });
+    }
+
+    if (!start.isBefore(end)) {
+      throw new BadRequestException({
+        code: 'INVALID_SPRINT_TIMELINE',
+
+        message: 'Ngày bắt đầu Sprint phải nhỏ hơn ngày kết thúc.',
+      });
+    }
+  }
+
+  // ==========================================
+  // PROJECT TIMELINE VALIDATION
+  // ==========================================
+
+  private validateSprintInsideProject(
+    startDate: string | Date,
+
+    endDate: string | Date,
+
+    project: Project,
+  ) {
+    const sprintStart = dayjs(startDate);
+
+    const sprintEnd = dayjs(endDate);
+
+    const projectStart = dayjs(project.startDate);
+
+    const projectEnd = dayjs(project.endDate);
+
+    if (!projectStart.isValid() || !projectEnd.isValid()) {
+      throw new ConflictException({
+        code: 'INVALID_PROJECT_TIMELINE',
+
+        message: 'Timeline của Project không hợp lệ.',
+      });
+    }
+
+    if (sprintStart.isBefore(projectStart, 'day')) {
+      throw new ConflictException({
+        code: 'SPRINT_OUTSIDE_PROJECT_TIMELINE',
+
+        message: 'Sprint không được bắt đầu trước ngày bắt đầu Project.',
+      });
+    }
+
+    if (sprintEnd.isAfter(projectEnd, 'day')) {
+      throw new ConflictException({
+        code: 'SPRINT_OUTSIDE_PROJECT_TIMELINE',
+
+        message: 'Sprint không được kết thúc sau ngày kết thúc Project.',
+      });
+    }
+  }
+
+  // ==========================================
+  // ATTENDANT
+  // ==========================================
+
+  private normalizeAttendant(
+    attendant: string | string[] | null | undefined,
+  ): string[] {
+    if (attendant === undefined || attendant === null) {
+      return [];
+    }
+
+    if (Array.isArray(attendant)) {
+      return attendant.map((item) => String(item).trim()).filter(Boolean);
+    }
+
+    const value = String(attendant).trim();
+
+    if (!value) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(value);
+
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter(Boolean);
+      }
+    } catch {
+      // Không phải JSON string.
+    }
+
+    return [value];
+  }
+
+  // ==========================================
+  // INITIAL STATUS
+  // ==========================================
+
+  private determineInitialStatus(_startDate: string | Date) {
+    // Sprint luôn bắt đầu ở UPCOMING.
+    //
+    // Đến ngày bắt đầu KHÔNG có nghĩa
+    // Sprint tự động ACTIVE.
+    //
+    // PM phải chủ động Start Sprint
+    // thông qua:
+    //
+    // PATCH /sprints/:id/status
+    //
+    // Khi đó Readiness Guard mới chạy.
+    return 'upcoming';
+  }
+
+  private async saveTimelineUpdateWithLocks(updatedSprint: Sprint) {
+    return this.dataSource.transaction(async (manager) => {
+      const activeStatuses = [
+        UserSprintStatus.REQUESTED,
+        UserSprintStatus.PENDING_APPROVAL,
+        UserSprintStatus.ASSIGNED,
+      ];
+      const allocationRepo = manager.getRepository(UserSprint);
+      const loadActiveAllocations = () =>
+        allocationRepo.find({
+          where: {
+            sprintId: updatedSprint.id,
+            status: In(activeStatuses),
+          },
+        });
+
+      const initiallyAffected = await loadActiveAllocations();
+      const lockedUserIds = new Set<string>();
+      await this.lockUsers(
+        manager,
+        initiallyAffected.map((allocation) => allocation.userId),
+        lockedUserIds,
+      );
+
+      const sprintRepo = manager.getRepository(Sprint);
+      const lockedSprint = await sprintRepo
+        .createQueryBuilder('sprint')
+        .setLock('pessimistic_write')
+        .where('sprint.id = :sprintId', { sprintId: updatedSprint.id })
+        .andWhere('sprint.isDeleted = :isDeleted', { isDeleted: false })
+        .getOne();
+
+      if (!lockedSprint) {
+        throw new NotFoundException({
+          code: 'SPRINT_NOT_FOUND',
+          message: 'Không tìm thấy Sprint.',
+        });
+      }
+
+      const latestAllocations = await allocationRepo
+        .createQueryBuilder('allocation')
+        .setLock('pessimistic_read')
+        .where('allocation.sprintId = :sprintId', {
+          sprintId: updatedSprint.id,
+        })
+        .andWhere('allocation.status IN (:...statuses)', {
+          statuses: activeStatuses,
+        })
+        .getMany();
+      await this.lockUsers(
+        manager,
+        latestAllocations.map((allocation) => allocation.userId),
+        lockedUserIds,
+      );
+
+      const currentStatus = this.normalizeStatus(lockedSprint.status);
+      if (currentStatus === 'COMPLETED' || currentStatus === 'CANCELLED') {
+        throw new ConflictException({
+          code: 'SPRINT_TERMINAL_STATE',
+          message: 'Sprint đã ở trạng thái kết thúc nên không thể chỉnh sửa.',
+        });
+      }
+
+      await this.assertTasksInsideNewSprintTimeline(
+        lockedSprint.id,
+        updatedSprint.startDate,
+        updatedSprint.endDate,
+        manager.getRepository(Task),
+      );
+      await this.assertAllocationsSafeForNewTimeline(
+        lockedSprint.id,
+        updatedSprint.startDate,
+        updatedSprint.endDate,
+        allocationRepo,
+      );
+
+      lockedSprint.name = updatedSprint.name;
+      lockedSprint.projectId = updatedSprint.projectId;
+      lockedSprint.project = updatedSprint.project;
+      lockedSprint.startDate = updatedSprint.startDate;
+      lockedSprint.endDate = updatedSprint.endDate;
+      lockedSprint.attendant = updatedSprint.attendant;
+
+      return sprintRepo.save(lockedSprint);
+    });
+  }
+
+  private async lockUsers(
+    manager: EntityManager,
+    userIds: string[],
+    alreadyLocked: Set<string>,
+  ) {
+    const pendingIds = [...new Set(userIds)]
+      .filter((userId) => !alreadyLocked.has(userId))
+      .sort();
+
+    for (const userId of pendingIds) {
+      await manager
+        .getRepository(User)
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.id = :userId', { userId })
+        .getOneOrFail();
+      alreadyLocked.add(userId);
+    }
+  }
+
+  private async assertTasksInsideNewSprintTimeline(
+    sprintId: string,
+    startDate: string | Date,
+    endDate: string | Date,
+    taskRepo: Repository<Task> = this.taskRepo,
+  ) {
+    const tasks = await taskRepo.find({
+      where: {
+        sprintId,
+        isDeleted: false,
+      },
+
+      order: {
+        createdAt: 'ASC',
+      },
+    });
+
+    const newStart = dayjs(startDate);
+
+    const newEnd = dayjs(endDate);
+
+    const invalidTasks = tasks
+      .filter((task) => {
+        // Legacy Task chưa có timeline:
+        // không block việc edit Sprint ở bước này.
+        if (!task.startDate || !task.endDate) {
+          return false;
+        }
+
+        const taskStart = dayjs(task.startDate);
+
+        const taskEnd = dayjs(task.endDate);
+
+        return (
+          taskStart.isBefore(newStart, 'day') || taskEnd.isAfter(newEnd, 'day')
+        );
+      })
+      .map((task) => ({
+        id: task.id,
+
+        title: task.title ?? 'Task chưa đặt tên',
+
+        startDate: task.startDate,
+
+        endDate: task.endDate,
+
+        status: task.status,
+
+        progress: Number(task.progress ?? 0),
+      }));
+
+    if (invalidTasks.length > 0) {
+      throw new ConflictException({
+        code: 'SPRINT_TIMELINE_TASK_CONFLICT',
+
+        message: `Timeline mới làm ${invalidTasks.length} Task nằm ngoài Sprint.`,
+
+        requestedTimeline: {
+          startDate,
+          endDate,
+        },
+
+        invalidTasks,
+      });
+    }
+
+    return true;
+  }
+
+  private async assertAllocationsSafeForNewTimeline(
+    sprintId: string,
+    startDate: string | Date,
+    endDate: string | Date,
+    userSprintRepo: Repository<UserSprint> = this.userSprintRepo,
+  ) {
+    const activeStatuses = [
+      UserSprintStatus.REQUESTED,
+      UserSprintStatus.PENDING_APPROVAL,
+      UserSprintStatus.ASSIGNED,
+    ];
+
+    // ==========================================
+    // ALLOCATION CỦA SPRINT ĐANG ĐƯỢC SỬA
+    // ==========================================
+
+    const currentAllocations = await userSprintRepo
+      .createQueryBuilder('allocation')
+      .where('allocation.sprintId = :sprintId', {
+        sprintId,
+      })
+      .andWhere('allocation.status IN (:...statuses)', {
+        statuses: activeStatuses,
+      })
+      .getMany();
+
+    if (currentAllocations.length === 0) {
+      return true;
+    }
+
+    const userIds = [
+      ...new Set(currentAllocations.map((allocation) => allocation.userId)),
+    ];
+
+    // ==========================================
+    // CÁC ALLOCATION KHÁC CÓ THỂ OVERLAP
+    // VỚI TIMELINE MỚI
+    // ==========================================
+
+    const otherAllocations = await userSprintRepo
+      .createQueryBuilder('allocation')
+      .innerJoinAndSelect('allocation.sprint', 'otherSprint')
+      .where('allocation.userId IN (:...userIds)', {
+        userIds,
+      })
+      .andWhere('allocation.sprintId != :sprintId', {
+        sprintId,
+      })
+      .andWhere('allocation.status IN (:...statuses)', {
+        statuses: activeStatuses,
+      })
+      .andWhere('otherSprint.isDeleted = :isDeleted', {
+        isDeleted: false,
+      })
+      .andWhere('otherSprint.status != :cancelledStatus', {
+        cancelledStatus: 'cancelled',
+      })
+      // Overlap với timeline MỚI:
+      //
+      // other.start <= new.end
+      // AND
+      // other.end >= new.start
+      .andWhere('otherSprint.startDate <= :newEndDate', {
+        newEndDate: endDate,
+      })
+      .andWhere('otherSprint.endDate >= :newStartDate', {
+        newStartDate: startDate,
+      })
+      .getMany();
+
+    // ==========================================
+    // CHECK TỪNG USER
+    // ==========================================
+
+    const conflicts = currentAllocations
+      .map((currentAllocation) => {
+        const userOtherAllocations = otherAllocations.filter(
+          (allocation) => allocation.userId === currentAllocation.userId,
+        );
+
+        const otherPercentage = userOtherAllocations.reduce(
+          (total, allocation) => total + Number(allocation.percitant ?? 0),
+          0,
+        );
+
+        const currentPercentage = Number(currentAllocation.percitant ?? 0);
+
+        const totalPercentage = currentPercentage + otherPercentage;
+
+        if (totalPercentage <= 100) {
+          return null;
+        }
+
+        return {
+          userId: currentAllocation.userId,
+
+          currentAllocation: {
+            allocationId: currentAllocation.id,
+
+            percentage: currentPercentage,
+
+            status: currentAllocation.status,
+          },
+
+          otherAllocation: otherPercentage,
+
+          totalAllocation: totalPercentage,
+
+          overBy: totalPercentage - 100,
+
+          conflicts: userOtherAllocations.map((allocation) => ({
+            allocationId: allocation.id,
+
+            sprintId: allocation.sprintId,
+
+            sprintName: allocation.sprint?.name ?? null,
+
+            percentage: Number(allocation.percitant ?? 0),
+
+            status: allocation.status,
+
+            startDate: allocation.sprint?.startDate ?? null,
+
+            endDate: allocation.sprint?.endDate ?? null,
+          })),
+        };
+      })
+      .filter((item) => item !== null);
+
+    if (conflicts.length > 0) {
+      throw new ConflictException({
+        code: 'SPRINT_TIMELINE_ALLOCATION_CONFLICT',
+
+        message:
+          'Timeline mới làm một hoặc nhiều nhân sự bị vượt quá 100% allocation.',
+
+        requestedTimeline: {
+          startDate,
+          endDate,
+        },
+
+        conflicts,
+      });
+    }
+
+    return true;
+  }
+  // ==========================================
+  // NORMALIZE STATUS
+  // ==========================================
+  private async assertNoSprintOverlap(
+    projectId: string,
+    startDate: string | Date,
+    endDate: string | Date,
+    excludeSprintId?: string,
+  ) {
+    const query = this.sprintRepo
+      .createQueryBuilder('sprint')
+      .where('sprint.projectId = :projectId', {
+        projectId,
+      })
+      .andWhere('sprint.isDeleted = :isDeleted', {
+        isDeleted: false,
+      })
+      // Sprint đã CANCELLED không còn chiếm timeline.
+      .andWhere('sprint.status != :cancelledStatus', {
+        cancelledStatus: 'cancelled',
+      })
+      // Hai khoảng thời gian overlap khi:
+      //
+      // existing.start <= new.end
+      // AND
+      // existing.end >= new.start
+      .andWhere('sprint.startDate <= :endDate', {
+        endDate,
+      })
+      .andWhere('sprint.endDate >= :startDate', {
+        startDate,
+      });
+
+    if (excludeSprintId) {
+      query.andWhere('sprint.id != :excludeSprintId', {
+        excludeSprintId,
+      });
+    }
+
+    const conflictingSprint = await query
+      .orderBy('sprint.startDate', 'ASC')
+      .getOne();
+
+    if (conflictingSprint) {
+      throw new ConflictException({
+        code: 'SPRINT_TIMELINE_OVERLAP',
+
+        message: `Sprint bị trùng thời gian với "${conflictingSprint.name}".`,
+
+        conflict: {
+          sprintId: conflictingSprint.id,
+
+          sprintName: conflictingSprint.name,
+
+          startDate: conflictingSprint.startDate,
+
+          endDate: conflictingSprint.endDate,
+
+          status: conflictingSprint.status,
+        },
+      });
+    }
+
+    return true;
+  }
+
+  private async assertSprintTimelineChangeSafe(
+    sprint: Sprint,
+    startDate: string | Date,
+    endDate: string | Date,
+  ) {
+    // ==========================================
+    // TASK IMPACT
+    // ==========================================
+
+    await this.assertTasksInsideNewSprintTimeline(
+      sprint.id,
+      startDate,
+      endDate,
+    );
+
+    // ==========================================
+    // RESOURCE / CAPACITY IMPACT
+    // ==========================================
+
+    await this.assertAllocationsSafeForNewTimeline(
+      sprint.id,
+      startDate,
+      endDate,
+    );
+
+    return true;
+  }
+  private normalizeStatus(status?: string) {
+    return (status ?? '').toString().toUpperCase();
+  }
+}

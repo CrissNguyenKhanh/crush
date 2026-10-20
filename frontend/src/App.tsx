@@ -1,122 +1,202 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import LayoutAdmin from "./layout/admin";
+import ErrorPage from "./pages/result/error";
+import NotFoundPage from "./pages/result/not-found";
+import LoginPage from "./pages/auth/login";
+import { useAppDispatch } from "./hooks/hooks";
+import { useEffect } from "react";
+import { fetchAccount } from "./redux/account/accountSlice";
+import DashboardPage from "./pages/admin/dashboard";
+import UsersPage from "./pages/admin/users";
+import RolesPage from "./pages/admin/roles";
+import PermissionsPage from "./pages/admin/permissions";
+import LayoutHR from "./layout/hr";
+import HRDashboard from "./pages/hr/Dashboard";
+import WalletAdmin from "./pages/hr/WalletAdmin";
+import ReviewConsole from "./pages/hr/ReviewConsole";
+import LayoutPM from "./layout/pm";
+import { PMActionCenterPage } from "./pages/pm/PMActionCenterPage";
+
+import { SprintManagementPage } from "./pages/pm/SprintManagement";
+import { MyTeamPage } from "./pages/pm/MyTeamPage"; // (Trang ở sprint trước)
+
+import DeveloperLayout from "./layout/dev";
+import DashBoardDev from "./pages/dev/dashboard";
+import SkillPage from "./pages/dev/skill";
+import UserSkillPage from "./pages/dev/user-skill";
+
+import { ProjectsPage } from "./pages/pm/ProjectsPage";
+import { ProjectDetail } from "./pages/pm/ProjectDetail";
+import { ResourcePlannerPage } from "./pages/pm/ResourcePlannerPage";
+import { PMDashboardPage } from "./pages/pm/PMDashboardPage";
+
+import BenchForecast from "./pages/hr/BenchForecast";
+import TalentManagement from "./pages/hr/TalentManagement";
+import UserPorjectPage from "./pages/dev/project";
+import DevProjectDetail from "./pages/dev/project-detail";
+import SkillTreePage from "./pages/dev/skill-tree";
+import ProtectedRoute from "./components/auth/ProtectedRoute";
+import NotPermittedPage from "./pages/result/not-permitted";
+import DeveloperTasksPage from "./pages/dev/tasks";
+import HrMatchingRecommendations from "./pages/hr/MatchingRecommendations";
+import { MatchingRecommendationsPage } from "./pages/pm/MatchingRecommendationsPage";
 
 function App() {
-  const [count, setCount] = useState(0)
+  const dispatch = useAppDispatch();
+
+  useEffect(() => {
+    dispatch(fetchAccount());
+  }, [dispatch]);
+
+  const router = createBrowserRouter([
+    {
+      path: "/",
+      element: <div>Home</div>,
+    },
+    {
+      path: "/admin",
+      element: (
+        <ProtectedRoute allowedRoles={["ADMIN"]}>
+          <LayoutAdmin />
+        </ProtectedRoute>
+      ),
+      errorElement: <ErrorPage />,
+      children: [
+        { index: true, element: <DashboardPage /> },
+        { path: "users", element: <UsersPage /> },
+        { path: "roles", element: <RolesPage /> },
+        { path: "permissions", element: <PermissionsPage /> },
+      ],
+    },
+    {
+      path: "/hr",
+      element: (
+        <ProtectedRoute allowedRoles={["HR"]}>
+          <LayoutHR />
+        </ProtectedRoute>
+      ),
+      errorElement: <ErrorPage />,
+      children: [
+        { index: true, element: <HRDashboard /> },
+        { path: "dashboard", element: <HRDashboard /> },
+        { path: "talents", element: <TalentManagement /> },
+        { path: "wallet", element: <WalletAdmin /> },
+        { path: "review", element: <ReviewConsole /> },
+        { path: "bench", element: <BenchForecast /> },
+        { path: "matching", element: <HrMatchingRecommendations /> },
+      ],
+    },
+
+    {
+      path: "/pm",
+      element: (
+        <ProtectedRoute allowedRoles={["PM"]}>
+          <LayoutPM />
+        </ProtectedRoute>
+      ),
+      children: [
+        {
+          index: true,
+          element: <PMDashboardPage />,
+        },
+        {
+          path: "dashboard",
+          element: <PMDashboardPage />,
+        },
+        {
+          path: "action-center",
+          element: <PMActionCenterPage />,
+        },
+        {
+          path: "projects",
+          element: <ProjectsPage />, // Màn hình Danh sách Dự án
+        },
+        {
+          path: "projects/:projectId",
+          element: <ProjectDetail />, // Bấm vào 1 dự án thì văng ra Command Center tuyệt đẹp
+        },
+        {
+          path: "sprints/:sprintId",
+          element: <SprintManagementPage />, // Bấm vào "Manage Tasks" trong Command Center thì văng ra đây
+        },
+        {
+          path: "my-team",
+          element: <MyTeamPage />,
+        },
+        {
+          path: "resources",
+          element: <ResourcePlannerPage />,
+        },
+        {
+          path: "matching",
+          element: <MatchingRecommendationsPage />,
+        },
+      ],
+    },
+
+    {
+      path: "/developer",
+      element: (
+        <ProtectedRoute allowedRoles={["DEVELOPER"]}>
+          <DeveloperLayout />
+        </ProtectedRoute>
+      ),
+      errorElement: <ErrorPage />,
+      children: [
+        {
+          index: true,
+          element: <DashBoardDev />,
+        },
+        {
+          path: "skills",
+          element: <SkillPage />,
+        },
+        {
+          path: "user-skill",
+          element: <UserSkillPage />,
+        },
+        {
+          path: "user-project",
+          element: <UserPorjectPage />,
+        },
+        {
+          path: "tasks",
+          element: <DeveloperTasksPage />,
+        },
+        {
+          path: "projects/:projectId",
+          element: <DevProjectDetail />,
+        },
+        {
+          path: "skill-tree",
+          element: <SkillTreePage />,
+        }
+      ],
+    },
+
+    {
+      path: "/login",
+      element: <LoginPage />,
+    },
+    {
+      path: "/register",
+      element: <div>Register</div>,
+    },
+    {
+      path: "/403",
+      element: <NotPermittedPage />,
+    },
+    {
+      path: "*",
+      element: <NotFoundPage />,
+    },
+  ]);
 
   return (
     <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
+      <RouterProvider router={router} />
     </>
-  )
+  );
 }
 
-export default App
+export default App;

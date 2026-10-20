@@ -31,6 +31,29 @@
 $ npm install
 ```
 
+## TypeORM migrations
+
+This project uses a dedicated TypeORM DataSource at [src/database/data-source.ts](src/database/data-source.ts) and stores migrations in [migration](migration).
+
+```bash
+# create an empty migration shell
+$ npm run migration:create -- ./migration/AddUsersTable
+
+# generate a migration from entity changes
+$ npm run migration:generate -- ./migration/AddUsersTable
+
+# apply pending migrations
+$ npm run migration:run
+
+# revert the last migration
+$ npm run migration:revert
+
+# show pending/applied migrations
+$ npm run migration:show
+```
+
+If you want the app to run pending migrations on startup, set `TYPEORM_MIGRATIONS_RUN=true` in your environment.
+
 ## Compile and run the project
 
 ```bash
