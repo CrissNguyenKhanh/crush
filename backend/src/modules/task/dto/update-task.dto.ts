@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -17,7 +18,7 @@ import { Type } from 'class-transformer';
 import { TaskPriority } from '../entities/task.entity';
 
 class UpdateRequiredSkillDto {
-  @IsString()
+  @IsUUID('4')
   skill_id: string;
 
   @IsInt()

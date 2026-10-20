@@ -14,6 +14,19 @@ export class SkillsService {
     @InjectRepository(Skill) private skillsRepository: Repository<Skill>
   ) { }
 
+  findCatalog() {
+    return this.skillsRepository.find({
+      where: { isDeleted: false },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        parentId: true,
+      },
+      order: { name: 'ASC' },
+    });
+  }
+
   async create(createSkillDto: CreateSkillDto, user: IUser) {
     const isExist = await this.skillsRepository
       .createQueryBuilder('skills')

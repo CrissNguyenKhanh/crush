@@ -49,6 +49,8 @@ import { ChatModule } from 'modules/chat/chat.module';
 import { ChatMessage } from 'modules/chat/entities/chat-message.entity';
 import { PmActionCenterModule } from './modules/pm-action-center/pm-action-center.module';
 import { validateEnvironment } from './config/environment';
+import { MatchingRecommendation } from './modules/matching-recommendations/entities/matching-recommendation.entity';
+import { MatchingRecommendationsModule } from './modules/matching-recommendations/matching-recommendations.module';
 
 @Module({
   imports: [
@@ -87,6 +89,7 @@ import { validateEnvironment } from './config/environment';
           Notification,
           Websocket,
           ChatMessage,
+          MatchingRecommendation,
         ],
         migrations: [join(__dirname, '..', 'migration', '*.{ts,js}')],
         migrationsRun: configService.get<boolean>('TYPEORM_MIGRATIONS_RUN', false),
@@ -115,6 +118,7 @@ import { validateEnvironment } from './config/environment';
     PmRealtimeModule,
     ChatModule,
     PmActionCenterModule,
+    MatchingRecommendationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

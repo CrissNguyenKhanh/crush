@@ -18,8 +18,11 @@ import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
 
 import { PmAccessService } from '../pm-access/pm-access.service';
 
-import { SkipCheckPermission } from 'decorator/customize';
+import { Roles, SkipCheckPermission } from 'decorator/customize';
 
+@UseGuards(JwtAuthGuard)
+@SkipCheckPermission()
+@Roles('PM')
 @Controller('projects')
 export class ProjectsController {
 

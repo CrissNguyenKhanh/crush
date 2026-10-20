@@ -7,6 +7,9 @@ export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 export const IS_PUBLIC_PERMISSION = "isPublicPermission";
 export const SkipCheckPermission = () => SetMetadata(IS_PUBLIC_PERMISSION, true);
 
+export const REQUIRED_ROLES = 'requiredRoles';
+export const Roles = (...roles: string[]) => SetMetadata(REQUIRED_ROLES, roles);
+
 
 
 export const RESPONSE_MESSAGE = 'response_message'

@@ -26,7 +26,7 @@ export interface TaskItem {
 
   title?: string;
 
-  description?: string;
+  description?: string | null;
 
   priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 

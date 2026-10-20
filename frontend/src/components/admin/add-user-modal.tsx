@@ -17,7 +17,6 @@ const STATUS_OPTIONS = [
     { label: 'In Project', value: 'IN_PROJECT' },
 ];
 
-const DEFAULT_PASSWORD = '123456';
 
 interface IRole {
     id: string;
@@ -50,19 +49,18 @@ const AddUserModal = ({ open, roles, onCancel, onSuccess }: IProps) => {
             const values = await form.validateFields();
             setSubmitting(true);
 
-            const payload = { ...values, password: DEFAULT_PASSWORD };
-            const res: any = await callCreateUser(payload);
+            const res = await callCreateUser(values);
 
             if (res?.data) {
                 message.success('Tạo user thành công');
                 form.resetFields();
                 onSuccess();
             } else {
-                message.error(res?.message || 'Có lỗi xảy ra khi tạo user');
+                message.error(res?.data?.message || 'Có lỗi xảy ra khi tạo user');
             }
-        } catch (err: any) {
-            if (err?.errorFields) return;
-            message.error(err?.message || 'Có lỗi xảy ra khi tạo user');
+        } catch (err: unknown) {
+            if (typeof err === 'object' && err !== null && 'errorFields' in err) return;
+            message.error(err instanceof Error ? err.message : 'Có lỗi xảy ra khi tạo user');
         } finally {
             setSubmitting(false);
         }
@@ -104,8 +102,15 @@ const AddUserModal = ({ open, roles, onCancel, onSuccess }: IProps) => {
                     <Input placeholder="Tự động điền sau khi nhập họ tên" />
                 </Form.Item>
 
-                <Form.Item label="Mật khẩu">
-                    <Input.Password value={DEFAULT_PASSWORD} disabled />
+                <Form.Item
+                    label="Mật khẩu"
+                    name="password"
+                    rules={[
+                        { required: true, message: 'Vui lòng nhập mật khẩu tạm thời' },
+                        { min: 12, message: 'Mật khẩu phải có ít nhất 12 ký tự' },
+                    ]}
+                >
+                    <Input.Password autoComplete="new-password" />
                 </Form.Item>
 
                 <Form.Item

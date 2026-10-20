@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { Task, TaskPriority, TaskStatus } from './entities/task.entity';
 
 import { UpdateTaskLifecycleDto } from './dto/update-task-lifecycle.dto';
@@ -28,6 +28,10 @@ import {
 import { SkillEvidence } from '../skill-evidences/entities/skill-evidence.entity';
 import { UserSkill } from '../user-skill/entities/user-skill.entity';
 import { EvidenceType } from 'common/enum/evidence.enum';
+import { Skill } from '../skills/entities/skill.entity';
+import { calculateWeightedSkillMatch } from './task-matching-score';
+import { CreateTaskDto } from './dto/create-task.dto';
+import { UpdateMyTaskProgressDto } from './dto/update-my-task-progress.dto';
 
 @Injectable()
 export class TasksService {
@@ -40,13 +44,12 @@ export class TasksService {
     private userRepo: Repository<User>,
     @InjectRepository(UserSprint)
     private readonly userSprintRepo: Repository<UserSprint>,
-    @InjectRepository(SkillEvidence)
-    private readonly skillEvidenceRepo: Repository<SkillEvidence>,
-    @InjectRepository(UserSkill)
-    private readonly userSkillRepo: Repository<UserSkill>,
+    @InjectRepository(Skill)
+    private readonly skillRepo: Repository<Skill>,
 
     private readonly taskDependenciesService: TaskDependenciesService,
     private readonly pmRealtimeService: PmRealtimeService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ==========================================
@@ -66,6 +69,44 @@ export class TasksService {
     });
   }
 
+  private async validateRequiredSkills(
+    requiredSkills: Array<{ skill_id: string }>,
+  ) {
+    const skillIds = requiredSkills.map((item) => item.skill_id);
+
+    if (new Set(skillIds).size !== skillIds.length) {
+      throw new ConflictException({
+        code: 'DUPLICATE_REQUIRED_SKILL',
+        message: 'Một kỹ năng không được xuất hiện nhiều lần trong Task.',
+      });
+    }
+
+    if (skillIds.length === 0) {
+      return;
+    }
+
+    const existingSkills = await this.skillRepo.find({
+      where: {
+        id: In(skillIds),
+        isDeleted: false,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (existingSkills.length !== skillIds.length) {
+      const existingIds = new Set(existingSkills.map((skill) => skill.id));
+      const missingSkillIds = skillIds.filter((id) => !existingIds.has(id));
+
+      throw new BadRequestException({
+        code: 'TASK_SKILL_NOT_FOUND',
+        message: 'Task chứa kỹ năng không tồn tại hoặc đã bị xóa.',
+        skillIds: missingSkillIds,
+      });
+    }
+  }
+
   async getTasksBySprint(sprintId: string) {
     return await this.taskRepo.find({
       where: { sprintId, isDeleted: false },
@@ -73,8 +114,47 @@ export class TasksService {
     });
   }
 
+  async getMyTasks(userId: string) {
+    return this.taskRepo.find({
+      where: { userId, isDeleted: false },
+      relations: { sprint: { project: true } },
+      order: { endDate: 'ASC', createdAt: 'DESC' },
+    });
+  }
+
+  async getMyTask(userId: string, taskId: string) {
+    const task = await this.taskRepo.findOne({
+      where: { id: taskId, userId, isDeleted: false },
+      relations: { sprint: { project: true } },
+    });
+
+    if (!task) {
+      throw new NotFoundException({
+        code: 'DEVELOPER_TASK_NOT_FOUND',
+        message: 'Không tìm thấy Task được giao cho bạn.',
+      });
+    }
+
+    return task;
+  }
+
+  async updateMyTaskProgress(
+    userId: string,
+    taskId: string,
+    data: UpdateMyTaskProgressDto,
+  ) {
+    if (data.status === undefined && data.progress === undefined) {
+      throw new BadRequestException({
+        code: 'EMPTY_DEVELOPER_TASK_UPDATE',
+        message: 'Phải truyền status hoặc progress.',
+      });
+    }
+
+    return this.updateTaskLifecycle(taskId, data, userId);
+  }
+
   // 4. Tạo Task và gán kĩ năng yêu cầu (Required Skills JSON)
-  async createTask(data: any) {
+  async createTask(data: CreateTaskDto) {
     if (!data.sprintId) {
       throw new BadRequestException({
         code: 'SPRINT_REQUIRED',
@@ -93,6 +173,8 @@ export class TasksService {
 
     const sprint = await this.assertSprintMutable(data.sprintId);
     this.validateTaskTimeline(data.startDate, data.endDate, sprint);
+    await this.validateRequiredSkills(data.requiredSkills ?? []);
+
     if (data.userId) {
       await this.assertUserAssignedToSprint(data.sprintId, data.userId);
     }
@@ -206,6 +288,8 @@ export class TasksService {
     // ==========================================
 
     if (data.requiredSkills !== undefined) {
+      await this.validateRequiredSkills(data.requiredSkills);
+
       const skillIds = data.requiredSkills.map((skill) => skill.skill_id);
 
       const uniqueSkillIds = new Set(skillIds);
@@ -964,13 +1048,34 @@ export class TasksService {
     // TASK SKILL REQUIREMENTS
     // ==========================================
 
+    const requiredSkillIds = (task.requiredSkills ?? [])
+      .map((requirement) => requirement.skill_id)
+      .filter(Boolean);
+
+    const requiredSkillEntities = requiredSkillIds.length
+      ? await this.skillRepo.find({
+          where: { id: In(requiredSkillIds), isDeleted: false },
+          select: { id: true, name: true },
+        })
+      : [];
+
+    const skillNames = new Map(
+      requiredSkillEntities.map((skill) => [skill.id, skill.name]),
+    );
+
     const requirements = (task.requiredSkills ?? []).map(
       (requirement: any) => ({
         identifier: requirement.skill_id ?? requirement.skill,
 
-        label: requirement.skill ?? requirement.skill_id ?? 'Chưa xác định',
+        label:
+          skillNames.get(requirement.skill_id) ??
+          requirement.skill ??
+          requirement.skill_id ??
+          'Chưa xác định',
 
         minLevel: Number(requirement.min_level ?? requirement.level ?? 1),
+
+        weight: Math.max(1, Number(requirement.weight ?? 1)),
       }),
     );
 
@@ -984,25 +1089,17 @@ export class TasksService {
         // SKILL MATCHING
         // ======================================
 
-        const matchedSkills = requirements
-          .filter((requirement) =>
-            user.userSkills.some(
-              (userSkill) =>
-                (userSkill.skillId === requirement.identifier ||
-                  userSkill.skill?.name === requirement.identifier) &&
-                Number(userSkill.level ?? 0) >= requirement.minLevel,
-            ),
-          )
-          .map((requirement) => requirement.label);
+        const skillMatch = calculateWeightedSkillMatch(
+          requirements,
+          user.userSkills.map((userSkill) => ({
+            skillId: userSkill.skillId,
+            level: Number(userSkill.level ?? 0),
+          })),
+        );
 
-        const missingSkills = requirements
-          .filter((requirement) => !matchedSkills.includes(requirement.label))
-          .map((requirement) => requirement.label);
-
-        const matchScore =
-          requirements.length > 0
-            ? Math.round((matchedSkills.length / requirements.length) * 100)
-            : 0;
+        const matchedSkills = skillMatch.matchedSkills;
+        const missingSkills = skillMatch.missingSkills;
+        const matchScore = skillMatch.score;
 
         // ======================================
         // SPRINT ALLOCATION
@@ -1128,68 +1225,84 @@ export class TasksService {
       });
   }
   async updateTaskAssignee(taskId: string, userId: string | null) {
-    const task = await this.taskRepo.findOne({
-      where: {
-        id: taskId,
+    const savedTask = await this.dataSource.transaction(async (manager) => {
+      const taskRepo = manager.getRepository(Task);
+      const task = await taskRepo
+        .createQueryBuilder('task')
+        .setLock('pessimistic_write')
+        .where('task.id = :taskId', { taskId })
+        .andWhere('task.isDeleted = :isDeleted', { isDeleted: false })
+        .getOne();
 
-        isDeleted: false,
-      },
+      if (!task) {
+        throw new NotFoundException({
+          code: 'TASK_NOT_FOUND',
+
+          message: 'Không tìm thấy Task.',
+        });
+      }
+
+      // Sprint completed/cancelled
+      // thì không được đổi owner.
+      await this.assertSprintMutable(task.sprintId);
+
+      // ========================================
+      // DONE TASK
+      // ========================================
+
+      if (task.status === TaskStatus.DONE) {
+        throw new ConflictException({
+          code: 'DONE_TASK_ASSIGNEE_LOCKED',
+
+          message: 'Task đã DONE nên không thể thay đổi owner.',
+        });
+      }
+
+      // ========================================
+      // UNASSIGN
+      // ========================================
+
+      if (!userId) {
+        task.userId = null;
+        return taskRepo.save(task);
+      }
+
+      // ========================================
+      // VALIDATE SPRINT MEMBERSHIP
+      // ========================================
+
+      const lockedUser = await manager
+        .getRepository(User)
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.id = :userId', { userId })
+        .andWhere('user.isDeleted = :isDeleted', { isDeleted: false })
+        .getOne();
+
+      if (!lockedUser) {
+        throw new NotFoundException({
+          code: 'USER_NOT_FOUND',
+          message: 'Không tìm thấy nhân sự.',
+        });
+      }
+
+      await this.assertUserAssignedToSprint(
+        task.sprintId,
+        userId,
+        manager.getRepository(User),
+        manager.getRepository(UserSprint),
+      );
+
+      // ========================================
+      // ASSIGN
+      // ========================================
+
+      task.userId = userId;
+
+      return taskRepo.save(task);
     });
 
-    if (!task) {
-      throw new NotFoundException({
-        code: 'TASK_NOT_FOUND',
-
-        message: 'Không tìm thấy Task.',
-      });
-    }
-
-    // Sprint completed/cancelled
-    // thì không được đổi owner.
-    await this.assertSprintMutable(task.sprintId);
-
-    // ========================================
-    // DONE TASK
-    // ========================================
-
-    if (task.status === TaskStatus.DONE) {
-      throw new ConflictException({
-        code: 'DONE_TASK_ASSIGNEE_LOCKED',
-
-        message: 'Task đã DONE nên không thể thay đổi owner.',
-      });
-    }
-
-    // ========================================
-    // UNASSIGN
-    // ========================================
-
-    if (!userId) {
-      task.userId = null;
-
-      const savedTask = await this.taskRepo.save(task);
-
-      await this.publishTaskChanged(savedTask, 'ASSIGNED');
-
-      return savedTask;
-    }
-
-    // ========================================
-    // VALIDATE SPRINT MEMBERSHIP
-    // ========================================
-
-    await this.assertUserAssignedToSprint(task.sprintId, userId);
-
-    // ========================================
-    // ASSIGN
-    // ========================================
-
-    task.userId = userId;
-
-    const savedTask = await this.taskRepo.save(task);
-
     await this.publishTaskChanged(savedTask, 'ASSIGNED');
-
     return savedTask;
   }
 
@@ -1287,18 +1400,45 @@ export class TasksService {
     return savedTask;
   }
 
-  async updateTaskLifecycle(taskId: string, data: UpdateTaskLifecycleDto) {
-    const task = await this.taskRepo.findOne({
-      where: {
-        id: taskId,
-        isDeleted: false,
-      },
-    });
+  async updateTaskLifecycle(
+    taskId: string,
+    data: UpdateTaskLifecycleDto,
+    ownerUserId?: string,
+  ) {
+    const savedTask = await this.dataSource.transaction((manager) =>
+      this.updateTaskLifecycleInTransaction(taskId, data, manager, ownerUserId),
+    );
+
+    await this.publishTaskChanged(savedTask, 'STATUS_CHANGED');
+    return savedTask;
+  }
+
+  private async updateTaskLifecycleInTransaction(
+    taskId: string,
+    data: UpdateTaskLifecycleDto,
+    manager: EntityManager,
+    ownerUserId?: string,
+  ) {
+    const taskQuery = manager
+      .getRepository(Task)
+      .createQueryBuilder('task')
+      .setLock('pessimistic_write')
+      .where('task.id = :taskId', { taskId })
+      .andWhere('task.isDeleted = :isDeleted', { isDeleted: false });
+
+    if (ownerUserId) {
+      taskQuery.andWhere('task.userId = :ownerUserId', { ownerUserId });
+    }
+
+    const task = await taskQuery.getOne();
 
     if (!task) {
       throw new NotFoundException('Không tìm thấy Task');
     }
-    await this.assertSprintMutable(task.sprintId);
+    await this.assertSprintMutable(
+      task.sprintId,
+      manager.getRepository(Sprint),
+    );
 
     // ==========================================
     // STATUS / PROGRESS CONSISTENCY
@@ -1412,27 +1552,64 @@ export class TasksService {
       }
     }
 
+    if (
+      (task.status === TaskStatus.IN_PROGRESS ||
+        task.status === TaskStatus.BLOCKED) &&
+      Number(task.progress) >= 100
+    ) {
+      throw new BadRequestException({
+        code: 'INVALID_TASK_LIFECYCLE',
+        message: 'Task có progress = 100% phải ở trạng thái DONE.',
+      });
+    }
+
     // ==========================================
     // AUTO-LEVELING: GRANT XP ON COMPLETION
     // ==========================================
-    if (oldStatus !== TaskStatus.DONE && task.status === TaskStatus.DONE && task.userId) {
+    if (
+      oldStatus !== TaskStatus.DONE &&
+      task.status === TaskStatus.DONE &&
+      task.userId
+    ) {
+      await manager
+        .getRepository(User)
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.id = :userId', { userId: task.userId })
+        .getOneOrFail();
+
+      const userSkillRepo = manager.getRepository(UserSkill);
+      const skillEvidenceRepo = manager.getRepository(SkillEvidence);
+
       if (task.requiredSkills && task.requiredSkills.length > 0) {
         for (const reqSkill of task.requiredSkills) {
-          let userSkill = await this.userSkillRepo.findOne({
+          let userSkill = await userSkillRepo.findOne({
             where: { userId: task.userId, skillId: reqSkill.skill_id },
           });
 
           if (!userSkill) {
-            userSkill = this.userSkillRepo.create({
+            userSkill = userSkillRepo.create({
               userId: task.userId,
               skillId: reqSkill.skill_id,
               level: 1,
               currentXp: 0,
             });
-            await this.userSkillRepo.save(userSkill);
+            await userSkillRepo.save(userSkill);
           }
 
-          const evidence = this.skillEvidenceRepo.create({
+          const existingEvidence = await skillEvidenceRepo.findOne({
+            where: {
+              userSkillId: userSkill.id,
+              taskId: task.id,
+              type: EvidenceType.TASK_COMPLETION,
+              isDeleted: false,
+            },
+          });
+          if (existingEvidence) {
+            continue;
+          }
+
+          const evidence = skillEvidenceRepo.create({
             userSkillId: userSkill.id,
             taskId: task.id,
             type: EvidenceType.TASK_COMPLETION,
@@ -1441,16 +1618,12 @@ export class TasksService {
             status: 'PENDING',
             xpGranted: reqSkill.weight || 10,
           });
-          await this.skillEvidenceRepo.save(evidence);
+          await skillEvidenceRepo.save(evidence);
         }
       }
     }
 
-    const savedTask = await this.taskRepo.save(task);
-
-    await this.publishTaskChanged(savedTask, 'STATUS_CHANGED');
-
-    return savedTask;
+    return manager.getRepository(Task).save(task);
   }
 
   private validateTaskTimeline(
@@ -1507,8 +1680,13 @@ export class TasksService {
       });
     }
   }
-  private async assertUserAssignedToSprint(sprintId: string, userId: string) {
-    const user = await this.userRepo.findOne({
+  private async assertUserAssignedToSprint(
+    sprintId: string,
+    userId: string,
+    userRepo: Repository<User> = this.userRepo,
+    userSprintRepo: Repository<UserSprint> = this.userSprintRepo,
+  ) {
+    const user = await userRepo.findOne({
       where: {
         id: userId,
         isDeleted: false,
@@ -1523,7 +1701,7 @@ export class TasksService {
       });
     }
 
-    const allocation = await this.userSprintRepo.findOne({
+    const allocation = await userSprintRepo.findOne({
       where: {
         sprintId,
 
@@ -1549,8 +1727,11 @@ export class TasksService {
     return allocation;
   }
 
-  private async assertSprintMutable(sprintId: string) {
-    const sprint = await this.sprintRepo.findOne({
+  private async assertSprintMutable(
+    sprintId: string,
+    sprintRepo: Repository<Sprint> = this.sprintRepo,
+  ) {
+    const sprint = await sprintRepo.findOne({
       where: {
         id: sprintId,
         isDeleted: false,

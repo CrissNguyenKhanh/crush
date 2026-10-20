@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
-import { SkipCheckPermission } from 'decorator/customize';
+import { Roles, SkipCheckPermission, User } from 'decorator/customize';
 
 import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
 
@@ -28,6 +28,9 @@ import { UpdateTaskTimelineDto } from './dto/update-task-timeline.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 
 import { CarryOverTaskDto } from './dto/carry-over-task.dto';
+import { CreateTaskDto } from './dto/create-task.dto';
+import { UpdateMyTaskProgressDto } from './dto/update-my-task-progress.dto';
+import type { IUser } from 'common/types/user.interface';
 
 @UseGuards(JwtAuthGuard)
 @SkipCheckPermission()
@@ -45,6 +48,7 @@ export class TasksController {
   // GET /tasks/sprint/:sprintId
   // ==========================================
 
+  @Roles('PM')
   @Get('sprint/:sprintId')
   async getTasksBySprint(
     @Param('sprintId')
@@ -66,12 +70,38 @@ export class TasksController {
     };
   }
 
+  @Roles('DEVELOPER')
+  @Get('my')
+  async getMyTasks(@User() user: IUser) {
+    return this.tasksService.getMyTasks(user.id);
+  }
+
+  @Roles('DEVELOPER')
+  @Get('my/:taskId')
+  async getMyTask(
+    @Param('taskId') taskId: string,
+    @User() user: IUser,
+  ) {
+    return this.tasksService.getMyTask(user.id, taskId);
+  }
+
+  @Roles('DEVELOPER')
+  @Patch('my/:taskId/progress')
+  async updateMyTaskProgress(
+    @Param('taskId') taskId: string,
+    @Body() body: UpdateMyTaskProgressDto,
+    @User() user: IUser,
+  ) {
+    return this.tasksService.updateMyTaskProgress(user.id, taskId, body);
+  }
+
   // ==========================================
   // MATCHING CANDIDATES
   //
   // GET /tasks/:taskId/candidates
   // ==========================================
 
+  @Roles('PM')
   @Get(':taskId/candidates')
   async getMatchingCandidates(
     @Param('taskId')
@@ -102,6 +132,7 @@ export class TasksController {
   // history cho phép Task source đã archive.
   // ==========================================
 
+  @Roles('PM')
   @Get(':taskId/carry-over-history')
   async getTaskCarryOverHistory(
     @Param('taskId')
@@ -131,10 +162,11 @@ export class TasksController {
   // PM phải quản lý Project chứa Sprint.
   // ==========================================
 
+  @Roles('PM')
   @Post()
   async createTask(
     @Body()
-    body: any,
+    body: CreateTaskDto,
 
     @Req()
     req: any,
@@ -162,6 +194,7 @@ export class TasksController {
   // PATCH /tasks/:taskId/assignee
   // ==========================================
 
+  @Roles('PM')
   @Patch(':taskId/assignee')
   async updateTaskAssignee(
     @Param('taskId')
@@ -207,6 +240,7 @@ export class TasksController {
   // PATCH /tasks/:taskId/timeline
   // ==========================================
 
+  @Roles('PM')
   @Patch(':taskId/timeline')
   async updateTaskTimeline(
     @Param('taskId')
@@ -237,6 +271,7 @@ export class TasksController {
   // PATCH /tasks/:taskId/lifecycle
   // ==========================================
 
+  @Roles('PM')
   @Patch(':taskId/lifecycle')
   async updateTaskLifecycle(
     @Param('taskId')
@@ -271,6 +306,7 @@ export class TasksController {
   // - Sprint đích
   // ==========================================
 
+  @Roles('PM')
   @Post(':taskId/carry-over')
   async carryOverTask(
     @Param('taskId')
@@ -316,6 +352,7 @@ export class TasksController {
   // Generic PATCH đặt sau các PATCH cụ thể.
   // ==========================================
 
+  @Roles('PM')
   @Patch(':taskId')
   async updateTask(
     @Param('taskId')
@@ -346,6 +383,7 @@ export class TasksController {
   // DELETE /tasks/:taskId
   // ==========================================
 
+  @Roles('PM')
   @Delete(':taskId')
   async removeTask(
     @Param('taskId')

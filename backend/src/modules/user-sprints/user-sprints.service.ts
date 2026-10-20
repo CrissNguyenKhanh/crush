@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { UserSprint, UserSprintStatus } from './entities/user-sprint.entity';
 import { Sprint } from '../sprints/entities/sprint.entity';
 import { User } from '../users/entities/user.entity';
@@ -18,6 +18,8 @@ import {
 import { IUser } from 'common/types/user.interface';
 import { Project } from 'modules/projects/entities/project.entity';
 import { SprintAllocationInvitationService } from './sprint-allocation-invitation.service';
+import { CreateUserSprintDto } from './dto/create-user-sprint.dto';
+import { ReleaseUserSprintDto } from './dto/release-user-sprint.dto';
 
 @Injectable()
 export class UserSprintService {
@@ -38,7 +40,8 @@ export class UserSprintService {
     private readonly projectRepo: Repository<Project>,
 
     private readonly sprintAllocationInvitationService: SprintAllocationInvitationService,
-  ) { }
+    private readonly dataSource: DataSource,
+  ) {}
 
   // ==========================================
   // PM REALTIME
@@ -140,11 +143,7 @@ export class UserSprintService {
   }
 
   // 2. PM gửi yêu cầu gán nhân sự
-  async assignUserToSprint(data: {
-    sprintId: string;
-    userId: string;
-    percitant: number;
-  }) {
+  async assignUserToSprint(data: CreateUserSprintDto) {
     // ==========================================
     // 1. VALIDATE INPUT
     // ==========================================
@@ -159,163 +158,182 @@ export class UserSprintService {
       throw new BadRequestException('Phần trăm phân bổ phải từ 1 đến 100.');
     }
 
-    // ==========================================
-    // 2. KIỂM TRA SPRINT CÓ TỒN TẠI
-    // ==========================================
+    const savedAllocation = await this.dataSource.transaction(
+      async (manager) => {
+        const userRepo = manager.getRepository(User);
+        const sprintRepo = manager.getRepository(Sprint);
+        const userSprintRepo = manager.getRepository(UserSprint);
 
-    const sprint = await this.sprintRepo.findOne({
-      where: {
-        id: data.sprintId,
+        const lockedUser = await userRepo
+          .createQueryBuilder('user')
+          .setLock('pessimistic_write')
+          .where('user.id = :userId', { userId: data.userId })
+          .andWhere('user.isDeleted = :isDeleted', { isDeleted: false })
+          .getOne();
+
+        if (!lockedUser) {
+          throw new NotFoundException('Không tìm thấy nhân sự.');
+        }
+
+        // ==========================================
+        // 2. KIỂM TRA SPRINT CÓ TỒN TẠI
+        // ==========================================
+
+        const sprint = await sprintRepo
+          .createQueryBuilder('sprint')
+          .setLock('pessimistic_read')
+          .where('sprint.id = :sprintId', { sprintId: data.sprintId })
+          .getOne();
+
+        if (!sprint) {
+          throw new NotFoundException('Không tìm thấy Sprint.');
+        }
+        this.assertSprintMutable(sprint);
+        if (!sprint.startDate || !sprint.endDate) {
+          throw new BadRequestException(
+            'Sprint chưa có thời gian bắt đầu/kết thúc nên chưa thể phân bổ nhân sự.',
+          );
+        }
+
+        // ==========================================
+        // 3. CHỐNG REQUEST TRÙNG TRONG CÙNG SPRINT
+        // ==========================================
+
+        const activeStatuses = [
+          UserSprintStatus.REQUESTED,
+          UserSprintStatus.PENDING_APPROVAL,
+          UserSprintStatus.ASSIGNED,
+        ];
+
+        const duplicateAllocation = await userSprintRepo
+          .createQueryBuilder('userSprint')
+          .where('userSprint.sprintId = :sprintId', {
+            sprintId: data.sprintId,
+          })
+          .andWhere('userSprint.userId = :userId', {
+            userId: data.userId,
+          })
+          .andWhere('userSprint.status IN (:...activeStatuses)', {
+            activeStatuses,
+          })
+          .getOne();
+
+        if (duplicateAllocation) {
+          throw new ConflictException({
+            code: 'DUPLICATE_ALLOCATION',
+
+            message:
+              'Nhân sự này đã có yêu cầu phân bổ đang hoạt động trong Sprint.',
+
+            allocationId: duplicateAllocation.id,
+
+            status: duplicateAllocation.status,
+          });
+        }
+
+        // ==========================================
+        // 4. TÌM CÁC SPRINT BỊ TRÙNG THỜI GIAN
+        // ==========================================
+
+        const overlappingAllocations = await userSprintRepo
+          .createQueryBuilder('userSprint')
+
+          .innerJoinAndSelect('userSprint.sprint', 'sprint')
+
+          .where('userSprint.userId = :userId', {
+            userId: data.userId,
+          })
+
+          .andWhere('userSprint.status IN (:...activeStatuses)', {
+            activeStatuses,
+          })
+
+          // Không tính Sprint hiện tại.
+          // Trường hợp duplicate đã được xử lý phía trên.
+          .andWhere('userSprint.sprintId != :sprintId', {
+            sprintId: data.sprintId,
+          })
+
+          // overlap:
+          // existing.start <= requested.end
+          // AND
+          // existing.end >= requested.start
+          .andWhere('sprint.startDate <= :requestedEnd', {
+            requestedEnd: sprint.endDate,
+          })
+
+          .andWhere('sprint.endDate >= :requestedStart', {
+            requestedStart: sprint.startDate,
+          })
+
+          .getMany();
+
+        // ==========================================
+        // 5. TÍNH CAPACITY HIỆN TẠI
+        // ==========================================
+
+        const currentAllocation = overlappingAllocations.reduce(
+          (total, allocation) => total + Number(allocation.percitant ?? 0),
+          0,
+        );
+
+        const availableCapacity = Math.max(0, 100 - currentAllocation);
+
+        const afterAllocation = currentAllocation + requestedPercentage;
+
+        // ==========================================
+        // 6. CHẶN OVER-ALLOCATION
+        // ==========================================
+
+        if (afterAllocation > 100) {
+          throw new ConflictException({
+            code: 'OVER_ALLOCATION',
+
+            message: `Nhân sự hiện chỉ còn ${availableCapacity}% capacity trong khoảng thời gian của Sprint.`,
+
+            currentAllocation,
+
+            requestedAllocation: requestedPercentage,
+
+            availableCapacity,
+
+            afterAllocation,
+
+            conflicts: overlappingAllocations.map((allocation) => ({
+              allocationId: allocation.id,
+
+              sprintId: allocation.sprintId,
+
+              sprintName: allocation.sprint?.name,
+
+              percentage: allocation.percitant,
+
+              status: allocation.status,
+
+              startDate: allocation.sprint?.startDate,
+
+              endDate: allocation.sprint?.endDate,
+            })),
+          });
+        }
+
+        // ==========================================
+        // 7. HỢP LỆ -> TẠO REQUEST
+        // ==========================================
+
+        const newUserSprint = userSprintRepo.create({
+          sprintId: data.sprintId,
+
+          userId: data.userId,
+
+          percitant: requestedPercentage,
+
+          status: UserSprintStatus.REQUESTED,
+        });
+
+        return userSprintRepo.save(newUserSprint);
       },
-    });
-
-    if (!sprint) {
-      throw new NotFoundException('Không tìm thấy Sprint.');
-    }
-    this.assertSprintMutable(sprint);
-    if (!sprint.startDate || !sprint.endDate) {
-      throw new BadRequestException(
-        'Sprint chưa có thời gian bắt đầu/kết thúc nên chưa thể phân bổ nhân sự.',
-      );
-    }
-
-    // ==========================================
-    // 3. CHỐNG REQUEST TRÙNG TRONG CÙNG SPRINT
-    // ==========================================
-
-    const activeStatuses = [
-      UserSprintStatus.REQUESTED,
-      UserSprintStatus.PENDING_APPROVAL,
-      UserSprintStatus.ASSIGNED,
-    ];
-
-    const duplicateAllocation = await this.userSprintRepo
-      .createQueryBuilder('userSprint')
-      .where('userSprint.sprintId = :sprintId', {
-        sprintId: data.sprintId,
-      })
-      .andWhere('userSprint.userId = :userId', {
-        userId: data.userId,
-      })
-      .andWhere('userSprint.status IN (:...activeStatuses)', {
-        activeStatuses,
-      })
-      .getOne();
-
-    if (duplicateAllocation) {
-      throw new ConflictException({
-        code: 'DUPLICATE_ALLOCATION',
-
-        message:
-          'Nhân sự này đã có yêu cầu phân bổ đang hoạt động trong Sprint.',
-
-        allocationId: duplicateAllocation.id,
-
-        status: duplicateAllocation.status,
-      });
-    }
-
-    // ==========================================
-    // 4. TÌM CÁC SPRINT BỊ TRÙNG THỜI GIAN
-    // ==========================================
-
-    const overlappingAllocations = await this.userSprintRepo
-      .createQueryBuilder('userSprint')
-
-      .innerJoinAndSelect('userSprint.sprint', 'sprint')
-
-      .where('userSprint.userId = :userId', {
-        userId: data.userId,
-      })
-
-      .andWhere('userSprint.status IN (:...activeStatuses)', {
-        activeStatuses,
-      })
-
-      // Không tính Sprint hiện tại.
-      // Trường hợp duplicate đã được xử lý phía trên.
-      .andWhere('userSprint.sprintId != :sprintId', {
-        sprintId: data.sprintId,
-      })
-
-      // overlap:
-      // existing.start <= requested.end
-      // AND
-      // existing.end >= requested.start
-      .andWhere('sprint.startDate <= :requestedEnd', {
-        requestedEnd: sprint.endDate,
-      })
-
-      .andWhere('sprint.endDate >= :requestedStart', {
-        requestedStart: sprint.startDate,
-      })
-
-      .getMany();
-
-    // ==========================================
-    // 5. TÍNH CAPACITY HIỆN TẠI
-    // ==========================================
-
-    const currentAllocation = overlappingAllocations.reduce(
-      (total, allocation) => total + Number(allocation.percitant ?? 0),
-      0,
     );
-
-    const availableCapacity = Math.max(0, 100 - currentAllocation);
-
-    const afterAllocation = currentAllocation + requestedPercentage;
-
-    // ==========================================
-    // 6. CHẶN OVER-ALLOCATION
-    // ==========================================
-
-    if (afterAllocation > 100) {
-      throw new ConflictException({
-        code: 'OVER_ALLOCATION',
-
-        message: `Nhân sự hiện chỉ còn ${availableCapacity}% capacity trong khoảng thời gian của Sprint.`,
-
-        currentAllocation,
-
-        requestedAllocation: requestedPercentage,
-
-        availableCapacity,
-
-        afterAllocation,
-
-        conflicts: overlappingAllocations.map((allocation) => ({
-          allocationId: allocation.id,
-
-          sprintId: allocation.sprintId,
-
-          sprintName: allocation.sprint?.name,
-
-          percentage: allocation.percitant,
-
-          status: allocation.status,
-
-          startDate: allocation.sprint?.startDate,
-
-          endDate: allocation.sprint?.endDate,
-        })),
-      });
-    }
-
-    // ==========================================
-    // 7. HỢP LỆ -> TẠO REQUEST
-    // ==========================================
-
-    const newUserSprint = this.userSprintRepo.create({
-      sprintId: data.sprintId,
-
-      userId: data.userId,
-
-      percitant: requestedPercentage,
-
-      status: UserSprintStatus.REQUESTED,
-    });
-
-    const savedAllocation = await this.userSprintRepo.save(newUserSprint);
 
     await this.publishAllocationChanged(savedAllocation, 'CREATED');
 
@@ -534,8 +552,9 @@ export class UserSprintService {
   private async assertUserCanBeReleasedFromSprint(
     sprintId: string,
     userId: string,
+    taskRepo: Repository<Task> = this.taskRepo,
   ) {
-    const ownedTasks = await this.taskRepo.find({
+    const ownedTasks = await taskRepo.find({
       where: {
         sprintId,
         userId,
@@ -556,7 +575,7 @@ export class UserSprintService {
 
       const progress = Number(task.progress ?? 0);
 
-      return status !== TaskStatus.DONE || progress < 100;
+      return status !== String(TaskStatus.DONE).toUpperCase() || progress < 100;
     });
 
     if (unfinishedTasks.length > 0) {
@@ -587,69 +606,94 @@ export class UserSprintService {
   }
 
   // Hàm Giải phóng & Lưu đánh giá
-  async releaseUser(id: string, reviewData: any) {
-    const record = await this.userSprintRepo.findOne({
-      where: {
-        id,
-      },
+  async releaseUser(id: string, reviewData: ReleaseUserSprintDto) {
+    const reviewComment = reviewData.reviewComment.trim();
+    if (!reviewComment) {
+      throw new BadRequestException('Nội dung đánh giá không được để trống.');
+    }
 
-      relations: {
-        sprint: true,
-      },
+    const initialRecord = await this.userSprintRepo.findOne({
+      where: { id },
     });
-    if (!record) {
+    if (!initialRecord) {
       throw new NotFoundException('Không tìm thấy bản ghi phân bổ này!');
     }
-    if (!record.sprint) {
-      throw new NotFoundException('Không tìm thấy Sprint của allocation.');
-    }
 
-    this.assertSprintMutable(record.sprint);
+    const savedAllocation = await this.dataSource.transaction(
+      async (manager) => {
+        await manager
+          .getRepository(User)
+          .createQueryBuilder('user')
+          .setLock('pessimistic_write')
+          .where('user.id = :userId', { userId: initialRecord.userId })
+          .getOneOrFail();
 
-    if (record.status !== UserSprintStatus.ASSIGNED) {
-      throw new ConflictException({
-        code: 'INVALID_RELEASE',
+        const allocationRepo = manager.getRepository(UserSprint);
+        const record = await allocationRepo.findOne({
+          where: {
+            id,
+          },
 
-        message: 'Chỉ nhân sự đang ASSIGNED mới được giải phóng.',
+          relations: {
+            sprint: true,
+          },
+        });
+        if (!record) {
+          throw new NotFoundException('Không tìm thấy bản ghi phân bổ này!');
+        }
+        if (!record.sprint) {
+          throw new NotFoundException('Không tìm thấy Sprint của allocation.');
+        }
 
-        currentStatus: record.status,
-      });
-    }
+        this.assertSprintMutable(record.sprint);
 
-    // ==========================================
-    // TASK OWNERSHIP GUARD
-    // ==========================================
-    //
-    // Chỉ khi allocation đang ASSIGNED
-    // mới kiểm tra xem nhân sự còn đang
-    // sở hữu Task chưa DONE hay không.
-    //
-    // Nếu còn:
-    // → chặn Release
-    //
-    // Nếu không:
-    // → cho Release
-    // ==========================================
+        if (record.status !== UserSprintStatus.ASSIGNED) {
+          throw new ConflictException({
+            code: 'INVALID_RELEASE',
 
-    await this.assertUserCanBeReleasedFromSprint(
-      record.sprintId,
-      record.userId,
+            message: 'Chỉ nhân sự đang ASSIGNED mới được giải phóng.',
+
+            currentStatus: record.status,
+          });
+        }
+
+        // ==========================================
+        // TASK OWNERSHIP GUARD
+        // ==========================================
+        //
+        // Chỉ khi allocation đang ASSIGNED
+        // mới kiểm tra xem nhân sự còn đang
+        // sở hữu Task chưa DONE hay không.
+        //
+        // Nếu còn:
+        // → chặn Release
+        //
+        // Nếu không:
+        // → cho Release
+        // ==========================================
+
+        await this.assertUserCanBeReleasedFromSprint(
+          record.sprintId,
+          record.userId,
+          manager.getRepository(Task),
+        );
+
+        // Cập nhật trạng thái và thông tin đánh giá
+        // ==========================================
+        // RELEASE + REVIEW
+        // ==========================================
+
+        record.status = UserSprintStatus.RELEASED;
+
+        record.hardSkillRate = reviewData.hardSkillRate;
+
+        record.softSkillRate = reviewData.softSkillRate;
+
+        record.reviewComment = reviewComment;
+
+        return allocationRepo.save(record);
+      },
     );
-
-    // Cập nhật trạng thái và thông tin đánh giá
-    // ==========================================
-    // RELEASE + REVIEW
-    // ==========================================
-
-    record.status = UserSprintStatus.RELEASED;
-
-    record.hardSkillRate = reviewData.hardSkillRate;
-
-    record.softSkillRate = reviewData.softSkillRate;
-
-    record.reviewComment = reviewData.reviewComment;
-
-    const savedAllocation = await this.userSprintRepo.save(record);
 
     await this.publishAllocationChanged(savedAllocation, 'RELEASED');
 
@@ -892,33 +936,34 @@ export class UserSprintService {
     }
   }
 
-
   async getUserSprints(user: IUser) {
     const isExist = await this.userSprintRepo.find({
       where: {
-        userId: user.id
-      }
-    })
+        userId: user.id,
+      },
+    });
     if (!isExist) {
-      throw new BadRequestException('Người dùng chưa được phân bổ vào Sprint nào');
+      throw new BadRequestException(
+        'Người dùng chưa được phân bổ vào Sprint nào',
+      );
     }
 
     const sprintIds = isExist.map((item) => item.sprintId);
     const sprints = await this.sprintRepo.find({
       where: {
-        id: In(sprintIds)
-      }
-    })
+        id: In(sprintIds),
+      },
+    });
     // return sprints;
     const projectIds = sprints.map((item) => item.projectId);
     const projects = await this.projectRepo.find({
       where: {
-        id: In(projectIds)
-      }
-    })
+        id: In(projectIds),
+      },
+    });
     return {
       sprints,
-      projects
-    }
+      projects,
+    };
   }
 }

@@ -19,6 +19,7 @@ import {
   MenuUnfoldOutlined,
   ProjectOutlined,
   TeamOutlined,
+  UserSwitchOutlined,
 } from "@ant-design/icons";
 
 import { useState, useEffect } from "react";
@@ -94,10 +95,10 @@ const LayoutPM = () => {
   useEffect(() => {
     connectSocket('/user-skills');
     const socket = getSocket('/user-skills');
-    const handleUpdated = (message: any) => {
+    const handleUpdated = (socketMessage: { message?: string }) => {
       messageApi.open({
         type: 'success',
-        content: message.message,
+        content: socketMessage.message ?? 'Dữ liệu kỹ năng đã được cập nhật.',
         styles: defaultStyles,
       });
     };
@@ -115,8 +116,6 @@ const LayoutPM = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [selectedKey, setSelectedKey] = useState<string>("projects");
-
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken();
@@ -125,23 +124,19 @@ const LayoutPM = () => {
   // ACTIVE MENU
   // ==========================================
 
-  useEffect(() => {
-    const path = location.pathname;
-
-    if (path === "/pm" || path.includes("/pm/dashboard")) {
-      setSelectedKey("dashboard");
-    } else if (path.includes("/pm/my-team")) {
-      setSelectedKey("my-team");
-    } else if (path.includes("/pm/sprints")) {
-      setSelectedKey("projects");
-    } else if (path.includes("/pm/resources")) {
-      setSelectedKey("resources");
-    } else if (path.includes("/pm/action-center")) {
-      setSelectedKey("action-center");
-    } else if (path.includes("/pm/projects")) {
-      setSelectedKey("projects");
-    }
-  }, [location.pathname]);
+  const path = location.pathname;
+  const selectedKey =
+    path === "/pm" || path.includes("/pm/dashboard")
+      ? "dashboard"
+      : path.includes("/pm/my-team")
+        ? "my-team"
+        : path.includes("/pm/resources")
+          ? "resources"
+          : path.includes("/pm/action-center")
+            ? "action-center"
+            : path.includes("/pm/matching")
+              ? "matching"
+              : "projects";
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -209,6 +204,12 @@ const LayoutPM = () => {
               icon: <DatabaseOutlined />,
               label: "Tài nguyên",
               onClick: () => navigate("/pm/resources"),
+            },
+            {
+              key: "matching",
+              icon: <UserSwitchOutlined />,
+              label: "Đề cử từ HR",
+              onClick: () => navigate("/pm/matching"),
             },
             {
               key: "action-center",

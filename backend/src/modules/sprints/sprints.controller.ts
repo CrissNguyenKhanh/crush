@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
-import { SkipCheckPermission } from 'decorator/customize';
+import { Roles, SkipCheckPermission } from 'decorator/customize';
 
 import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
 
@@ -27,6 +27,7 @@ import { UpdateSprintStatusDto } from './dto/update-sprint-status.dto';
 
 @UseGuards(JwtAuthGuard)
 @SkipCheckPermission()
+@Roles('PM')
 @Controller('sprints')
 export class SprintsController {
   constructor(

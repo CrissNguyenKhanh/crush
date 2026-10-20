@@ -22,6 +22,13 @@ export class SkillsController {
     return this.skillsService.findAll(1, 0, '', user);
   }
 
+  @Get('catalog')
+  @SkipCheckPermission()
+  @ResponseMessage('Get skill catalog successfully')
+  findCatalog() {
+    return this.skillsService.findCatalog();
+  }
+
   @Get()
   @SkipCheckPermission()
   findAll(

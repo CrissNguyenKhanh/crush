@@ -7,7 +7,7 @@ import {
 
 import { InjectRepository } from '@nestjs/typeorm';
 
-import { In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 
 import dayjs from 'dayjs';
 
@@ -33,6 +33,7 @@ import {
 } from '../user-sprints/entities/user-sprint.entity';
 
 import { TaskDependenciesService } from '../task-dependencies/task-dependencies.service';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class SprintsService {
@@ -52,6 +53,7 @@ export class SprintsService {
     private readonly taskDependenciesService: TaskDependenciesService,
 
     private readonly pmRealtimeService: PmRealtimeService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ==========================================
@@ -308,7 +310,9 @@ export class SprintsService {
     // PATCH /sprints/:id/status
     // ========================================
 
-    const savedSprint = await this.sprintRepo.save(sprint);
+    const savedSprint = timelineChanged
+      ? await this.saveTimelineUpdateWithLocks(sprint)
+      : await this.sprintRepo.save(sprint);
 
     await this.pmRealtimeService.publishProjectChanged({
       projectId: savedSprint.projectId,
@@ -2107,12 +2111,121 @@ export class SprintsService {
     // Khi đó Readiness Guard mới chạy.
     return 'upcoming';
   }
+
+  private async saveTimelineUpdateWithLocks(updatedSprint: Sprint) {
+    return this.dataSource.transaction(async (manager) => {
+      const activeStatuses = [
+        UserSprintStatus.REQUESTED,
+        UserSprintStatus.PENDING_APPROVAL,
+        UserSprintStatus.ASSIGNED,
+      ];
+      const allocationRepo = manager.getRepository(UserSprint);
+      const loadActiveAllocations = () =>
+        allocationRepo.find({
+          where: {
+            sprintId: updatedSprint.id,
+            status: In(activeStatuses),
+          },
+        });
+
+      const initiallyAffected = await loadActiveAllocations();
+      const lockedUserIds = new Set<string>();
+      await this.lockUsers(
+        manager,
+        initiallyAffected.map((allocation) => allocation.userId),
+        lockedUserIds,
+      );
+
+      const sprintRepo = manager.getRepository(Sprint);
+      const lockedSprint = await sprintRepo
+        .createQueryBuilder('sprint')
+        .setLock('pessimistic_write')
+        .where('sprint.id = :sprintId', { sprintId: updatedSprint.id })
+        .andWhere('sprint.isDeleted = :isDeleted', { isDeleted: false })
+        .getOne();
+
+      if (!lockedSprint) {
+        throw new NotFoundException({
+          code: 'SPRINT_NOT_FOUND',
+          message: 'Không tìm thấy Sprint.',
+        });
+      }
+
+      const latestAllocations = await allocationRepo
+        .createQueryBuilder('allocation')
+        .setLock('pessimistic_read')
+        .where('allocation.sprintId = :sprintId', {
+          sprintId: updatedSprint.id,
+        })
+        .andWhere('allocation.status IN (:...statuses)', {
+          statuses: activeStatuses,
+        })
+        .getMany();
+      await this.lockUsers(
+        manager,
+        latestAllocations.map((allocation) => allocation.userId),
+        lockedUserIds,
+      );
+
+      const currentStatus = this.normalizeStatus(lockedSprint.status);
+      if (currentStatus === 'COMPLETED' || currentStatus === 'CANCELLED') {
+        throw new ConflictException({
+          code: 'SPRINT_TERMINAL_STATE',
+          message: 'Sprint đã ở trạng thái kết thúc nên không thể chỉnh sửa.',
+        });
+      }
+
+      await this.assertTasksInsideNewSprintTimeline(
+        lockedSprint.id,
+        updatedSprint.startDate,
+        updatedSprint.endDate,
+        manager.getRepository(Task),
+      );
+      await this.assertAllocationsSafeForNewTimeline(
+        lockedSprint.id,
+        updatedSprint.startDate,
+        updatedSprint.endDate,
+        allocationRepo,
+      );
+
+      lockedSprint.name = updatedSprint.name;
+      lockedSprint.projectId = updatedSprint.projectId;
+      lockedSprint.project = updatedSprint.project;
+      lockedSprint.startDate = updatedSprint.startDate;
+      lockedSprint.endDate = updatedSprint.endDate;
+      lockedSprint.attendant = updatedSprint.attendant;
+
+      return sprintRepo.save(lockedSprint);
+    });
+  }
+
+  private async lockUsers(
+    manager: EntityManager,
+    userIds: string[],
+    alreadyLocked: Set<string>,
+  ) {
+    const pendingIds = [...new Set(userIds)]
+      .filter((userId) => !alreadyLocked.has(userId))
+      .sort();
+
+    for (const userId of pendingIds) {
+      await manager
+        .getRepository(User)
+        .createQueryBuilder('user')
+        .setLock('pessimistic_write')
+        .where('user.id = :userId', { userId })
+        .getOneOrFail();
+      alreadyLocked.add(userId);
+    }
+  }
+
   private async assertTasksInsideNewSprintTimeline(
     sprintId: string,
     startDate: string | Date,
     endDate: string | Date,
+    taskRepo: Repository<Task> = this.taskRepo,
   ) {
-    const tasks = await this.taskRepo.find({
+    const tasks = await taskRepo.find({
       where: {
         sprintId,
         isDeleted: false,
@@ -2179,6 +2292,7 @@ export class SprintsService {
     sprintId: string,
     startDate: string | Date,
     endDate: string | Date,
+    userSprintRepo: Repository<UserSprint> = this.userSprintRepo,
   ) {
     const activeStatuses = [
       UserSprintStatus.REQUESTED,
@@ -2190,7 +2304,7 @@ export class SprintsService {
     // ALLOCATION CỦA SPRINT ĐANG ĐƯỢC SỬA
     // ==========================================
 
-    const currentAllocations = await this.userSprintRepo
+    const currentAllocations = await userSprintRepo
       .createQueryBuilder('allocation')
       .where('allocation.sprintId = :sprintId', {
         sprintId,
@@ -2213,7 +2327,7 @@ export class SprintsService {
     // VỚI TIMELINE MỚI
     // ==========================================
 
-    const otherAllocations = await this.userSprintRepo
+    const otherAllocations = await userSprintRepo
       .createQueryBuilder('allocation')
       .innerJoinAndSelect('allocation.sprint', 'otherSprint')
       .where('allocation.userId IN (:...userIds)', {

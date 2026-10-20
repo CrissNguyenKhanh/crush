@@ -6,7 +6,7 @@ import {
   ParseUUIDPipe,
   Query,
 } from '@nestjs/common';
-import { ResponseMessage } from 'decorator/customize';
+import { ResponseMessage, Roles } from 'decorator/customize';
 import { GetHrTalentsDto } from './dto/get-hr-talents.dto';
 import { HrTalentsService } from './hr-talents.service';
 import { GetHrSkillMatrixDto } from './dto/get-hr-skill-matrix.dto';
@@ -16,6 +16,7 @@ import { GetHrBenchTalentsDto } from './dto/get-hr-bench-talents.dto';
 import { GetHrBenchReadinessDto } from './dto/get-hr-bench-readiness.dto';
 
 @Controller('hr-talents')
+@Roles('HR')
 export class HrTalentsController {
   constructor(
     private readonly hrTalentsService: HrTalentsService,

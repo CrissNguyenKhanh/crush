@@ -20,6 +20,9 @@ import dayjs from "dayjs";
 import type { TaskItem } from "../../../common/types/pm";
 
 import { pmApi } from "../../../api/pm";
+import { callFetchSkillCatalog } from "../../../api";
+import type { Dayjs } from "dayjs";
+import { getApiErrorData } from "../../../utils/api-error";
 
 interface Props {
   open: boolean;
@@ -31,28 +34,18 @@ interface Props {
   onRefresh: () => void | Promise<void>;
 }
 
-const MOCK_SKILLS = [
-  {
-    value: "sk-1",
-    label: "ReactJS",
-  },
-  {
-    value: "sk-2",
-    label: "NodeJS",
-  },
-  {
-    value: "sk-3",
-    label: "PostgreSQL",
-  },
-  {
-    value: "sk-4",
-    label: "Figma",
-  },
-  {
-    value: "sk-5",
-    label: "AWS",
-  },
-];
+interface TaskFormValues {
+  title: string;
+  description?: string;
+  priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  budgetRate?: number | null;
+  dateRange?: [Dayjs, Dayjs];
+  requiredSkills?: Array<{
+    skill_id: string;
+    min_level: number;
+    weight: number;
+  }>;
+}
 
 export const EditTaskModal: React.FC<Props> = ({
   open,
@@ -63,6 +56,35 @@ export const EditTaskModal: React.FC<Props> = ({
   const [form] = Form.useForm();
 
   const [loading, setLoading] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillOptions, setSkillOptions] = useState<
+    Array<{ value: string; label: string }>
+  >([]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const loadSkills = async () => {
+      setSkillsLoading(true);
+      try {
+        const response = await callFetchSkillCatalog();
+        const skills = response?.data ?? [];
+        setSkillOptions(
+          (Array.isArray(skills) ? skills : []).map((skill: ISkills) => ({
+            value: skill.id,
+            label: skill.name,
+          })),
+        );
+      } catch {
+        setSkillOptions([]);
+        message.error("Không thể tải danh mục kỹ năng.");
+      } finally {
+        setSkillsLoading(false);
+      }
+    };
+
+    void loadSkills();
+  }, [open]);
 
   // ==========================================
   // LOAD TASK INTO FORM
@@ -109,7 +131,7 @@ export const EditTaskModal: React.FC<Props> = ({
   // SUBMIT
   // ==========================================
 
-  const handleFinish = async (values: any) => {
+  const handleFinish = async (values: TaskFormValues) => {
     if (!task) {
       return;
     }
@@ -142,10 +164,10 @@ export const EditTaskModal: React.FC<Props> = ({
       await onRefresh();
 
       onClose();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Lỗi cập nhật Task:", error);
 
-      const errorData = error?.response?.data;
+      const errorData = getApiErrorData(error);
 
       const code = errorData?.code ?? errorData?.error?.code;
 
@@ -351,7 +373,10 @@ export const EditTaskModal: React.FC<Props> = ({
                         width: 200,
                       }}
                       placeholder="Kỹ năng"
-                      options={MOCK_SKILLS}
+                      loading={skillsLoading}
+                      showSearch
+                      optionFilterProp="label"
+                      options={skillOptions}
                     />
                   </Form.Item>
 

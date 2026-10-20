@@ -4,25 +4,23 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
-import { InjectRepository } from '@nestjs/typeorm';
-
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 
 import { UserSprint, UserSprintStatus } from './entities/user-sprint.entity';
 
 import { SprintAllocationInvitationService } from './sprint-allocation-invitation.service';
 
 import { PmRealtimeService } from '../pm-realtime/pm-realtime.service';
+import { User } from '../users/entities/user.entity';
+import { Sprint } from '../sprints/entities/sprint.entity';
 
 @Injectable()
 export class SprintAllocationRetryService {
   constructor(
-    @InjectRepository(UserSprint)
-    private readonly userSprintRepo: Repository<UserSprint>,
-
     private readonly sprintAllocationInvitationService: SprintAllocationInvitationService,
 
     private readonly pmRealtimeService: PmRealtimeService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ==========================================
@@ -30,92 +28,128 @@ export class SprintAllocationRetryService {
   // ==========================================
 
   async retry(allocationId: string, percentage?: number) {
-    const allocation = await this.userSprintRepo.findOne({
-      where: {
-        id: allocationId,
+    const { saved, sprint } = await this.dataSource.transaction(
+      async (manager) => {
+        const allocationRepo = manager.getRepository(UserSprint);
+        let allocation = await allocationRepo.findOne({
+          where: {
+            id: allocationId,
+          },
+
+          relations: {
+            user: true,
+
+            sprint: {
+              project: true,
+            },
+          },
+        });
+
+        if (!allocation) {
+          throw new NotFoundException({
+            code: 'ALLOCATION_NOT_FOUND',
+
+            message: 'Không tìm thấy Allocation.',
+          });
+        }
+
+        await manager
+          .getRepository(User)
+          .createQueryBuilder('user')
+          .setLock('pessimistic_write')
+          .where('user.id = :userId', { userId: allocation.userId })
+          .getOneOrFail();
+
+        const reloadedAllocation = await allocationRepo.findOne({
+          where: { id: allocationId },
+          relations: { user: true, sprint: { project: true } },
+        });
+
+        if (!reloadedAllocation) {
+          throw new NotFoundException({
+            code: 'ALLOCATION_NOT_FOUND',
+            message: 'Không tìm thấy Allocation.',
+          });
+        }
+
+        allocation = reloadedAllocation;
+
+        // ========================================
+        // DECLINED ONLY
+        // ========================================
+
+        if (allocation.status !== UserSprintStatus.DECLINED) {
+          throw new ConflictException({
+            code: 'ALLOCATION_NOT_DECLINED',
+
+            message: 'Chỉ lời mời đã bị Dev từ chối mới được gửi lại.',
+
+            currentStatus: allocation.status,
+          });
+        }
+
+        const relatedProject = allocation.sprint?.project;
+        const sprint = await manager
+          .getRepository(Sprint)
+          .createQueryBuilder('sprint')
+          .setLock('pessimistic_read')
+          .where('sprint.id = :sprintId', { sprintId: allocation.sprintId })
+          .getOne();
+
+        if (!sprint) {
+          throw new NotFoundException({
+            code: 'SPRINT_NOT_FOUND',
+
+            message: 'Không tìm thấy Sprint.',
+          });
+        }
+
+        if (relatedProject) sprint.project = relatedProject;
+        allocation.sprint = sprint;
+
+        // ========================================
+        // SPRINT MUST STILL BE MUTABLE
+        // ========================================
+
+        const sprintStatus = (sprint.status ?? '').toString().toUpperCase();
+
+        if (sprintStatus === 'COMPLETED' || sprintStatus === 'CANCELLED') {
+          throw new ConflictException({
+            code: 'SPRINT_INVITATION_EXPIRED',
+
+            message:
+              'Sprint đã hoàn thành hoặc bị hủy nên không thể gửi lại lời mời.',
+          });
+        }
+
+        // ========================================
+        // NEW PERCENTAGE
+        // ========================================
+
+        const nextPercentage = percentage ?? Number(allocation.percitant ?? 0);
+
+        // ========================================
+        // CAPACITY RE-CHECK
+        // ========================================
+
+        await this.assertCapacityAvailable(allocation, nextPercentage, manager);
+
+        // ========================================
+        // UPDATE
+        //
+        // Giữ responseReason/respondedAt cũ.
+        // Đây là phản hồi gần nhất của Dev,
+        // hữu ích cho PM theo dõi.
+        // ========================================
+
+        allocation.percitant = nextPercentage;
+
+        allocation.status = UserSprintStatus.PENDING_APPROVAL;
+
+        const saved = await allocationRepo.save(allocation);
+        return { saved, sprint };
       },
-
-      relations: {
-        user: true,
-
-        sprint: {
-          project: true,
-        },
-      },
-    });
-
-    if (!allocation) {
-      throw new NotFoundException({
-        code: 'ALLOCATION_NOT_FOUND',
-
-        message: 'Không tìm thấy Allocation.',
-      });
-    }
-
-    // ========================================
-    // DECLINED ONLY
-    // ========================================
-
-    if (allocation.status !== UserSprintStatus.DECLINED) {
-      throw new ConflictException({
-        code: 'ALLOCATION_NOT_DECLINED',
-
-        message: 'Chỉ lời mời đã bị Dev từ chối mới được gửi lại.',
-
-        currentStatus: allocation.status,
-      });
-    }
-
-    const sprint = allocation.sprint;
-
-    if (!sprint) {
-      throw new NotFoundException({
-        code: 'SPRINT_NOT_FOUND',
-
-        message: 'Không tìm thấy Sprint.',
-      });
-    }
-
-    // ========================================
-    // SPRINT MUST STILL BE MUTABLE
-    // ========================================
-
-    const sprintStatus = (sprint.status ?? '').toString().toUpperCase();
-
-    if (sprintStatus === 'COMPLETED' || sprintStatus === 'CANCELLED') {
-      throw new ConflictException({
-        code: 'SPRINT_INVITATION_EXPIRED',
-
-        message:
-          'Sprint đã hoàn thành hoặc bị hủy nên không thể gửi lại lời mời.',
-      });
-    }
-
-    // ========================================
-    // NEW PERCENTAGE
-    // ========================================
-
-    const nextPercentage = percentage ?? Number(allocation.percitant ?? 0);
-
-    // ========================================
-    // CAPACITY RE-CHECK
-    // ========================================
-
-    await this.assertCapacityAvailable(allocation, nextPercentage);
-
-    // ========================================
-    // UPDATE
-    //
-    // Giữ responseReason/respondedAt cũ.
-    // Đây là phản hồi gần nhất của Dev,
-    // hữu ích cho PM theo dõi.
-    // ========================================
-
-    allocation.percitant = nextPercentage;
-
-    allocation.status = UserSprintStatus.PENDING_APPROVAL;
-
-    const saved = await this.userSprintRepo.save(allocation);
+    );
 
     // ========================================
     // REFRESH ALL PMs
@@ -163,6 +197,7 @@ export class SprintAllocationRetryService {
   private async assertCapacityAvailable(
     allocation: UserSprint,
     requestedPercentage: number,
+    manager: EntityManager,
   ) {
     const sprint = allocation.sprint;
 
@@ -182,7 +217,8 @@ export class SprintAllocationRetryService {
       UserSprintStatus.ASSIGNED,
     ];
 
-    const allocations = await this.userSprintRepo
+    const allocations = await manager
+      .getRepository(UserSprint)
       .createQueryBuilder('allocation')
 
       .innerJoin('allocation.sprint', 'sprint')

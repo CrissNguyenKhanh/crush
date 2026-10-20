@@ -39,7 +39,7 @@ export const callCreateUser = (data: {
     return axios.post('/users', data);
 }
 
-export const callDeleteUser = (id: String) => {
+export const callDeleteUser = (id: string) => {
     return axios.delete(`/users/${id}`);
 }
 
@@ -70,6 +70,10 @@ export const callFetchSkills = async (query: string): Promise<IBackendRes<IModel
 
 export const callFetchSkillsWithoutPaginate = async (): Promise<IBackendRes<IModelPaginate<ISkills>>> => {
     return await axios.get(`/skills/all`);
+}
+
+export const callFetchSkillCatalog = async (): Promise<IBackendRes<ISkills[]>> => {
+    return await axios.get('/skills/catalog');
 }
 
 export const callCreateSkill = async (data: { name: string; description: string; parentId?: string | null }): Promise<IBackendRes<ISkills>> => {

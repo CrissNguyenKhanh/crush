@@ -90,6 +90,16 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "moduleNameMapper": {
+      "^modules/(.*)$": "<rootDir>/modules/$1",
+      "^common/(.*)$": "<rootDir>/common/$1",
+      "^decorator/(.*)$": "<rootDir>/decorator/$1",
+      "^core/(.*)$": "<rootDir>/core/$1",
+      "^config/(.*)$": "<rootDir>/config/$1",
+      "^websockets/(.*)$": "<rootDir>/websockets/$1",
+      "^helper$": "<rootDir>/helper",
+      "^api-query-params$": "<rootDir>/test-support/api-query-params.ts"
+    },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

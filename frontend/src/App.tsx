@@ -37,13 +37,16 @@ import DevProjectDetail from "./pages/dev/project-detail";
 import SkillTreePage from "./pages/dev/skill-tree";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
 import NotPermittedPage from "./pages/result/not-permitted";
+import DeveloperTasksPage from "./pages/dev/tasks";
+import HrMatchingRecommendations from "./pages/hr/MatchingRecommendations";
+import { MatchingRecommendationsPage } from "./pages/pm/MatchingRecommendationsPage";
 
 function App() {
   const dispatch = useAppDispatch();
 
   useEffect(() => {
     dispatch(fetchAccount());
-  }, []);
+  }, [dispatch]);
 
   const router = createBrowserRouter([
     {
@@ -80,6 +83,7 @@ function App() {
         { path: "wallet", element: <WalletAdmin /> },
         { path: "review", element: <ReviewConsole /> },
         { path: "bench", element: <BenchForecast /> },
+        { path: "matching", element: <HrMatchingRecommendations /> },
       ],
     },
 
@@ -123,6 +127,10 @@ function App() {
           path: "resources",
           element: <ResourcePlannerPage />,
         },
+        {
+          path: "matching",
+          element: <MatchingRecommendationsPage />,
+        },
       ],
     },
 
@@ -150,6 +158,10 @@ function App() {
         {
           path: "user-project",
           element: <UserPorjectPage />,
+        },
+        {
+          path: "tasks",
+          element: <DeveloperTasksPage />,
         },
         {
           path: "projects/:projectId",

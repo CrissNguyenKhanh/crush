@@ -1,7 +1,7 @@
 import { Menu } from "antd";
 import Sider from "antd/es/layout/Sider";
 import { useLocation, useNavigate } from "react-router";
-import { DashboardOutlined } from '@ant-design/icons';
+import { CheckSquareOutlined, DashboardOutlined } from '@ant-design/icons';
 import { GiSkills } from "react-icons/gi";
 import { RiCertificate2Fill } from "react-icons/ri";
 import { FaProjectDiagram } from "react-icons/fa";
@@ -57,6 +57,12 @@ const SiderDev = (props: IProps) => {
                         icon: <DashboardOutlined />,
                         label: 'Dashboard',
                         onClick: () => navigate('/developer'),
+                    },
+                    {
+                        key: 'tasks',
+                        icon: <CheckSquareOutlined />,
+                        label: 'My Tasks',
+                        onClick: () => navigate('tasks')
                     },
                     {
                         key: 'skills',

@@ -8,11 +8,15 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   UseGuards,
 } from '@nestjs/common';
 
-import { ResponseMessage, SkipCheckPermission, User } from 'decorator/customize';
+import {
+  ResponseMessage,
+  Roles,
+  SkipCheckPermission,
+  User,
+} from 'decorator/customize';
 
 import { JwtAuthGuard } from '../auth/guard/jwt-auth.guard';
 
@@ -20,12 +24,17 @@ import { PmAccessService } from '../pm-access/pm-access.service';
 
 import { UserSprintService } from './user-sprints.service';
 
-import { UserSprintStatus } from './entities/user-sprint.entity';
 import type { IUser } from 'common/types/user.interface';
 import { SprintAllocationResponseService } from './sprint-allocation-response.service';
 import { SprintAllocationRetryService } from './sprint-allocation-retry.service';
-import { RespondSprintInvitationDto } from './dto/respond-sprint-invitation.dto';
+import {
+  RespondSprintInvitationDto,
+  SprintInvitationDecision,
+} from './dto/respond-sprint-invitation.dto';
 import { RetrySprintInvitationDto } from './dto/retry-sprint-invitation.dto';
+import { CreateUserSprintDto } from './dto/create-user-sprint.dto';
+import { ReleaseUserSprintDto } from './dto/release-user-sprint.dto';
+import { UpdateUserSprintStatusDto } from './dto/update-user-sprint-status.dto';
 
 @UseGuards(JwtAuthGuard)
 @SkipCheckPermission()
@@ -40,21 +49,20 @@ export class UserSprintController {
 
     private readonly sprintAllocationRetryService: SprintAllocationRetryService,
   ) {}
-
-
   @Get('sprint/:sprintId')
+  @Roles('PM')
   async getSprintUsers(
     @Param('sprintId')
     sprintId: string,
 
-    @Req()
-    req: any,
+    @User()
+    user: IUser,
   ) {
     // ========================================
     // SPRINT OWNERSHIP
     // ========================================
 
-    await this.pmAccessService.assertSprintAccess(req.user.id, sprintId);
+    await this.pmAccessService.assertSprintAccess(user.id, sprintId);
 
     const data = await this.userSprintService.getSprintUsers(sprintId);
 
@@ -80,6 +88,7 @@ export class UserSprintController {
   // ==========================================
 
   @Get('capacity/:userId')
+  @Roles('PM')
   async getUserCapacity(
     @Param('userId')
     userId: string,
@@ -87,8 +96,8 @@ export class UserSprintController {
     @Query('sprintId')
     sprintId: string,
 
-    @Req()
-    req: any,
+    @User()
+    user: IUser,
   ) {
     if (!sprintId) {
       throw new BadRequestException({
@@ -102,7 +111,7 @@ export class UserSprintController {
     // TARGET SPRINT OWNERSHIP
     // ========================================
 
-    await this.pmAccessService.assertSprintAccess(req.user.id, sprintId);
+    await this.pmAccessService.assertSprintAccess(user.id, sprintId);
 
     const data = await this.userSprintService.getUserCapacity(userId, sprintId);
 
@@ -125,11 +134,9 @@ export class UserSprintController {
   // ==========================================
 
   @Get('resource-planner')
-  async getResourcePlanner(
-    @Req()
-    req: any,
-  ) {
-    const currentPmId = req.user.id;
+  @Roles('PM')
+  async getResourcePlanner(@User() user: IUser) {
+    const currentPmId = user.id;
 
     const data = await this.userSprintService.getResourcePlanner(currentPmId);
 
@@ -151,9 +158,10 @@ export class UserSprintController {
   // ==========================================
 
   @Get('my-invitations')
-  async getMySprintInvitations(@Req() req: any) {
+  @Roles('DEVELOPER')
+  async getMySprintInvitations(@User() user: IUser) {
     const data = await this.sprintAllocationResponseService.getMyInvitations(
-      req.user.id,
+      user.id,
     );
 
     return {
@@ -164,13 +172,14 @@ export class UserSprintController {
   }
 
   @Patch(':id/respond')
+  @Roles('DEVELOPER')
   async respondSprintInvitation(
     @Param('id') id: string,
     @Body() body: RespondSprintInvitationDto,
-    @Req() req: any,
+    @User() user: IUser,
   ) {
     const data = await this.sprintAllocationResponseService.respond(
-      req.user.id,
+      user.id,
       id,
       body.decision,
       body.reason,
@@ -179,7 +188,7 @@ export class UserSprintController {
     return {
       statusCode: 200,
       message:
-        body.decision === 'ACCEPT'
+        body.decision === SprintInvitationDecision.ACCEPT
           ? 'Đã chấp nhận lời mời Sprint'
           : 'Đã từ chối lời mời Sprint',
       data,
@@ -187,12 +196,13 @@ export class UserSprintController {
   }
 
   @Post()
+  @Roles('PM')
   async assignUserToSprint(
     @Body()
-    body: any,
+    body: CreateUserSprintDto,
 
-    @Req()
-    req: any,
+    @User()
+    user: IUser,
   ) {
     // ========================================
     // BASIC INPUT
@@ -210,7 +220,7 @@ export class UserSprintController {
     // SPRINT OWNERSHIP
     // ========================================
 
-    await this.pmAccessService.assertSprintAccess(req.user.id, body.sprintId);
+    await this.pmAccessService.assertSprintAccess(user.id, body.sprintId);
 
     // ========================================
     // BUSINESS
@@ -246,18 +256,19 @@ export class UserSprintController {
   // ==========================================
 
   @Patch(':id/submit-approval')
+  @Roles('PM')
   async submitForApproval(
     @Param('id')
     id: string,
 
-    @Req()
-    req: any,
+    @User()
+    user: IUser,
   ) {
     // ========================================
     // ALLOCATION OWNERSHIP
     // ========================================
 
-    await this.pmAccessService.assertAllocationAccess(req.user.id, id);
+    await this.pmAccessService.assertAllocationAccess(user.id, id);
 
     const data = await this.userSprintService.submitForApproval(id);
 
@@ -277,18 +288,19 @@ export class UserSprintController {
   // ==========================================
 
   @Delete(':id/request')
+  @Roles('PM')
   async cancelRequest(
     @Param('id')
     id: string,
 
-    @Req()
-    req: any,
+    @User()
+    user: IUser,
   ) {
     // ========================================
     // ALLOCATION OWNERSHIP
     // ========================================
 
-    await this.pmAccessService.assertAllocationAccess(req.user.id, id);
+    await this.pmAccessService.assertAllocationAccess(user.id, id);
 
     const data = await this.userSprintService.cancelRequest(id);
 
@@ -317,12 +329,13 @@ export class UserSprintController {
   // ==========================================
 
   @Patch(':id/retry-invitation')
+  @Roles('PM')
   async retrySprintInvitation(
     @Param('id') id: string,
     @Body() body: RetrySprintInvitationDto,
-    @Req() req: any,
+    @User() user: IUser,
   ) {
-    await this.pmAccessService.assertAllocationAccess(req.user.id, id);
+    await this.pmAccessService.assertAllocationAccess(user.id, id);
 
     const data = await this.sprintAllocationRetryService.retry(
       id,
@@ -337,42 +350,32 @@ export class UserSprintController {
   }
 
   @Patch(':id')
+  @Roles('PM')
   async updateUserSprintStatus(
     @Param('id')
     id: string,
 
-    @Body('status')
-    status: string,
+    @Body()
+    body: UpdateUserSprintStatusDto,
 
-    @Req()
-    req: any,
+    @User()
+    user: IUser,
   ) {
     // ========================================
     // ALLOCATION OWNERSHIP
     // ========================================
 
-    await this.pmAccessService.assertAllocationAccess(req.user.id, id);
+    await this.pmAccessService.assertAllocationAccess(user.id, id);
 
     // ========================================
     // BASIC STATUS PAYLOAD
     // ========================================
 
-    if (!status) {
-      throw new BadRequestException({
-        code: 'ALLOCATION_STATUS_REQUIRED',
-
-        message: 'Phải truyền trạng thái Allocation.',
-      });
-    }
-
     // ========================================
     // BUSINESS STATE MACHINE
     // ========================================
 
-    const data = await this.userSprintService.updateStatus(
-      id,
-      status as UserSprintStatus,
-    );
+    const data = await this.userSprintService.updateStatus(id, body.status);
 
     return {
       statusCode: 200,
@@ -396,21 +399,22 @@ export class UserSprintController {
   // ==========================================
 
   @Patch(':id/release')
+  @Roles('PM')
   async releaseUser(
     @Param('id')
     id: string,
 
     @Body()
-    body: any,
+    body: ReleaseUserSprintDto,
 
-    @Req()
-    req: any,
+    @User()
+    user: IUser,
   ) {
     // ========================================
     // ALLOCATION OWNERSHIP
     // ========================================
 
-    await this.pmAccessService.assertAllocationAccess(req.user.id, id);
+    await this.pmAccessService.assertAllocationAccess(user.id, id);
 
     const data = await this.userSprintService.releaseUser(id, body);
 
@@ -424,6 +428,7 @@ export class UserSprintController {
   }
 
   @Get('user')
+  @Roles('DEVELOPER')
   @ResponseMessage('Lấy danh sách phân bổ Sprint của nhân sự thành công')
   async getUserSprints(@User() user: IUser) {
     return await this.userSprintService.getUserSprints(user);

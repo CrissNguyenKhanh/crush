@@ -20,7 +20,7 @@ export class UsersService {
 
   findOneByEmail(email: string) {
     return this.usersRepository.findOne({
-      where: { email },
+      where: { email, isDeleted: false },
       relations: {
         role: {
           permissions: true,

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import {
   Button,
@@ -16,6 +16,9 @@ import {
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 
 import { pmApi } from "../../../api/pm";
+import { callFetchSkillCatalog } from "../../../api";
+import type { Dayjs } from "dayjs";
+import { getApiErrorMessage } from "../../../utils/api-error";
 
 interface Props {
   open: boolean;
@@ -24,28 +27,18 @@ interface Props {
   onRefresh: () => void;
 }
 
-const MOCK_SKILLS = [
-  {
-    value: "sk-1",
-    label: "ReactJS",
-  },
-  {
-    value: "sk-2",
-    label: "NodeJS",
-  },
-  {
-    value: "sk-3",
-    label: "PostgreSQL",
-  },
-  {
-    value: "sk-4",
-    label: "Figma",
-  },
-  {
-    value: "sk-5",
-    label: "AWS",
-  },
-];
+interface TaskFormValues {
+  title: string;
+  description?: string;
+  priority?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  budgetRate?: number;
+  dateRange?: [Dayjs, Dayjs];
+  requiredSkills?: Array<{
+    skill_id: string;
+    min_level: number;
+    weight: number;
+  }>;
+}
 
 export const CreateTaskModal: React.FC<Props> = ({
   open,
@@ -56,12 +49,41 @@ export const CreateTaskModal: React.FC<Props> = ({
   const [form] = Form.useForm();
 
   const [loading, setLoading] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillOptions, setSkillOptions] = useState<
+    Array<{ value: string; label: string }>
+  >([]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const loadSkills = async () => {
+      setSkillsLoading(true);
+      try {
+        const response = await callFetchSkillCatalog();
+        const skills = response?.data ?? [];
+        setSkillOptions(
+          (Array.isArray(skills) ? skills : []).map((skill: ISkills) => ({
+            value: skill.id,
+            label: skill.name,
+          })),
+        );
+      } catch {
+        setSkillOptions([]);
+        message.error("Không thể tải danh mục kỹ năng.");
+      } finally {
+        setSkillsLoading(false);
+      }
+    };
+
+    void loadSkills();
+  }, [open]);
 
   // ==========================================
   // SUBMIT
   // ==========================================
 
-  const handleFinish = async (values: any) => {
+  const handleFinish = async (values: TaskFormValues) => {
     try {
       setLoading(true);
 
@@ -92,10 +114,10 @@ export const CreateTaskModal: React.FC<Props> = ({
       onRefresh();
 
       onClose();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Lỗi tạo Task:", error);
 
-      message.error(error?.response?.data?.message ?? "Lỗi khi tạo Task");
+      message.error(getApiErrorMessage(error, "Lỗi khi tạo Task"));
     } finally {
       setLoading(false);
     }
@@ -286,7 +308,10 @@ export const CreateTaskModal: React.FC<Props> = ({
                         width: 200,
                       }}
                       placeholder="Chọn kỹ năng"
-                      options={MOCK_SKILLS}
+                      loading={skillsLoading}
+                      showSearch
+                      optionFilterProp="label"
+                      options={skillOptions}
                     />
                   </Form.Item>
 

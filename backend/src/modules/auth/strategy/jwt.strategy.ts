@@ -4,7 +4,6 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { UsersService } from 'modules/users/users.service';
 import { IUser } from 'common/types/user.interface';
-import { permission } from 'process';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -20,20 +19,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: IUser) {
-    const { id, email, fullName, status, role } = payload;
-    const user = await this.usersService.findOneByEmail(email);
+    const user = await this.usersService.findOneByEmail(payload.email);
 
     if (!user) {
       throw new BadRequestException('User not found');
     }
     return {
-      id,
-      email,
-      fullName,
-      status,
-      role,
-      permissions: user?.role?.permissions || [],
-      managerId: user?.managerId || undefined,
-    }
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      status: user.status,
+      role: user.role,
+      permissions: user.role?.permissions || [],
+      managerId: user.managerId || undefined,
+    };
   }
 }
